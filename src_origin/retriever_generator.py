@@ -1,4 +1,3 @@
-# src/retriever_generator.py
 import os
 import chromadb
 from openai import OpenAI
@@ -12,6 +11,12 @@ import glob
 import math
 from collections import Counter
 from tqdm import tqdm
+# --- 导入jieba用于中文分词 ---
+import jieba
+# --- 导入NLTK BLEU相关模块 ---
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+import warnings
+warnings.filterwarnings('ignore') # 忽略NLTK可能产生的警告
 
 class QwenRetrieverGenerator:
     def __init__(self):
@@ -253,45 +258,6 @@ class QwenRetrieverGenerator:
             except:
                 return "抱歉，在生成答案时遇到问题。相关信息可能不足。"
     
-    def query(self, user_input: str) -> str:
-        """完整的 RAG 查询流程（包含重排序）"""
-        print(f"用户输入: {user_input}")
-        
-        # 1. 检索候选文档
-        print(f"正在检索前 {self.initial_retrieve_k} 个候选文档...")
-        candidate_docs = self.retrieve_documents(user_input)
-        
-        if not candidate_docs:
-            response = "抱歉，没有找到相关文档。"
-            self._log_interaction(user_input, response)
-            return response
-        
-        # 2. 显示初始检索结果
-        print("\n初始检索结果（按向量相似度）:")
-        for i, doc in enumerate(candidate_docs):
-            print(f"  #{i+1} 距离: {doc['initial_distance']:.4f} | 来源: {doc['metadata'].get('source', '未知')}")
-        
-        # 3. 对候选文档进行重排序
-        reranked_docs = self.rerank_documents(user_input, candidate_docs)
-        
-        # 4. 显示重排序结果
-        print("\n重排序后结果（按相关性分数）:")
-        for i, doc in enumerate(reranked_docs):
-            print(f"  #{doc['rerank_rank']} 分数: {doc['rerank_score']:.4f} | 来源: {doc['metadata'].get('source', '未知')}")
-        
-        # 5. 选择最终使用的top-k文档
-        final_docs = reranked_docs[:self.final_top_k]
-        print(f"\n选择前 {self.final_top_k} 个最相关片段用于生成回答")
-        
-        # 6. 生成答案
-        print("正在基于精选片段生成答案...")
-        answer = self.generate_answer(user_input, final_docs)
-        
-        # 7. 记录本次交互
-        self._log_interaction(user_input, answer)
-        
-        return answer
-    
     def get_relevance_rank(self, query, documents):
         """
         使用 qwen-turbo 判断第一个相关文档的排名
@@ -464,63 +430,62 @@ def get_ngrams(text, n):
 
 def calculate_bleu_score(candidate, reference, max_n=4):
     """
-    计算BLEU得分
-    :param candidate: 生成的句子
-    :param reference: 参考句子
-    :param max_n: 最大的n-gram阶数
-    :return: BLEU得分
+    使用 NLTK 计算 BLEU 得分
+    :param candidate: 生成的句子 (str)
+    :param reference: 参考句子 (str)
+    :param max_n: 最大的 n-gram 阶数 (默认 4)
+    :return: BLEU 得分 (float)
     """
     if not candidate or not reference:
         return 0.0
 
-    # 计算各阶n-gram的修正精确率
-    precisions = []
-    for n in range(1, max_n + 1):
-        candidate_ngrams = get_ngrams(candidate, n)
-        reference_ngrams = get_ngrams(reference, n)
-        
-        if len(candidate_ngrams) == 0:
-            precisions.append(0.0)
-            continue
+    try:
+        # 使用 jieba 进行中文分词
+        # jieba.lcut 返回一个分词后的列表
+        candidate_tokens = jieba.lcut(candidate.strip())
+        reference_tokens = jieba.lcut(reference.strip())
 
-        # 统计参考文本中各n-gram的数量
-        ref_counts = Counter(reference_ngrams)
-        
-        # 统计候选文本中各n-gram的数量
-        cand_counts = Counter(candidate_ngrams)
-        
-        # 计算匹配数量（修正：不超过参考文本中的最大出现次数）
-        clipped_matches = 0
-        for ngram, count in cand_counts.items():
-            clipped_matches += min(count, ref_counts[ngram])
-        
-        precision = clipped_matches / len(candidate_ngrams)
-        precisions.append(precision)
+        print(f"DEBUG: Candidate Tokens: {candidate_tokens}")
+        print(f"DEBUG: Reference Tokens: {reference_tokens}")
 
-    # 过滤掉0精度，避免log(0)
-    filtered_precisions = [p for p in precisions if p > 0]
-    if not filtered_precisions:
+        # 检查分词结果是否为列表
+        if not isinstance(candidate_tokens, list) or not isinstance(reference_tokens, list):
+            print(f"分词结果类型错误: candidate type={type(candidate_tokens)}, reference type={type(reference_tokens)}")
+            return 0.0
+
+        # 如果候选翻译的 token 数量为 0，则无法计算 BLEU
+        if len(candidate_tokens) == 0:
+            return 0.0
+
+        # 定义权重，实现等权重的几何平均
+        weights = (0.25, 0.25, 0.25, 0.25)
+
+        # 使用 smoothing function 来处理零精度问题
+        chencherry = SmoothingFunction()
+        
+        # 计算 BLEU 分数
+        # 确保 references 是一个包含列表的列表
+        references_for_nltk = [reference_tokens]
+        
+        # 确保 hypothesis 是一个列表
+        hypothesis_for_nltk = candidate_tokens
+        
+        bleu_score = sentence_bleu(
+            references=references_for_nltk,
+            hypothesis=hypothesis_for_nltk,
+            weights=weights,
+            smoothing_function=chencherry.method1
+        )
+
+        return bleu_score
+
+    except Exception as e:
+        # 捕获更具体的错误信息
+        import traceback
+        print(f"计算 BLEU 时发生异常: {e}")
+        traceback.print_exc() # 打印完整的堆栈跟踪
+        print(f"  Candidate: '{candidate}', Reference: '{reference}'")
         return 0.0
-
-    # 计算几何平均值（对数平均后取指数）
-    log_precision_sum = sum(math.log(p) for p in filtered_precisions) / max_n
-    geometric_mean_precision = math.exp(log_precision_sum)
-
-    # 计算简短惩罚 (Brevity Penalty)
-    c = len(candidate.split())
-    r = len(reference.split())
-    
-    if c > r:
-        bp = 1.0
-    else:
-        if c == 0:  # 防止除零错误，如果生成句子为空
-            bp = 0.0
-        else:
-            bp = math.exp(1 - r / c)
-
-    bleu_score = bp * geometric_mean_precision
-    return bleu_score
-
 
 def evaluate_from_test_data():
     """从测试数据评估 RAG 系统的性能指标"""
@@ -634,7 +599,10 @@ def evaluate_from_test_data():
                 # 6. 生成答案并计算 BLEU (使用重排序后的文档)
                 final_docs_for_generation = reranked_docs[:rag_system.final_top_k]
                 generated_answer = rag_system.generate_answer(query, final_docs_for_generation) # 这里会内部使用 rerank 信息
-                
+
+                print(f"DEBUG: Generated Answer: '{generated_answer}'") # 打印生成的答案
+                print(f"DEBUG: Reference Answer: '{reference_answer}'") # 打印参考答案
+
                 # 计算 BLEU 得分
                 bleu_score = calculate_bleu_score(generated_answer, reference_answer)
                 bleu_scores.append(bleu_score)
