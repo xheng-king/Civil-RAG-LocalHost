@@ -3,7 +3,7 @@ import json
 import numpy as np
 from database_manager import DatabaseManager
 from indexer import QwenIndexer
-from retriever_generator import interactive_query
+from rag_interface import interactive_query
 from image_captioner import ImageCaptioner
 from qa_generator import main as run_qa_generation
 
