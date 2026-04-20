@@ -6,6 +6,8 @@ embedding_model = "text-embedding-v2"
 
 rerank_model = "qwen3-rerank"
 
+rerank_base_url = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
+
 vllm = "qwen3-vl-flash"
 
-llm = "deepseek-r1-0528"
+llm = "qwen-flash"

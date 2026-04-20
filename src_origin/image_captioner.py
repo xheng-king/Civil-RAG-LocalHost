@@ -1,3 +1,4 @@
+# image_captioner.py
 import os
 import re
 import json
@@ -5,16 +6,19 @@ import base64
 from pathlib import Path
 from openai import OpenAI
 
+# 导入 settings.py 中的配置
+from settings import base_url_set, vllm
+
 class ImageCaptioner:
     def __init__(self):
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             raise ValueError("环境变量 OPENAI_API_KEY 未设置。")
         
-        # 使用与 retriever_generator.py 一致的 base_url
+        # 使用 settings.py 中配置的 base_url
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+            base_url=base_url_set
         )
         
         # 设置项目根目录和缓存目录
@@ -43,7 +47,8 @@ class ImageCaptioner:
         )
 
         response = self.client.chat.completions.create(
-            model="qwen3-vl-flash",  # 视觉语言模型
+            # 使用 settings.py 中配置的模型名称
+            model=vllm,  # 视觉语言模型
             messages=[
                 {
                     "role": "user",

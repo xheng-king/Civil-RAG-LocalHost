@@ -1,39 +1,24 @@
-# src/qa_generator.py
 import os
 import random
 import json
 from openai import OpenAI
 from typing import List, Optional
 
+from settings import base_url_set, llm
 
 class QAPairGenerator:
     def __init__(self, api_key: Optional[str] = None):
-        """
-        初始化问答对生成器
-
-        Args:
-            api_key: DashScope API密钥。如果为None，则尝试从环境变量获取。
-        """
         key_to_use = api_key or os.getenv("OPENAI_API_KEY")
         if not key_to_use:
             raise ValueError("请设置 OPENAI_API_KEY 环境变量或在初始化时传入api_key参数")
 
         self.client = OpenAI(
             api_key=key_to_use,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+            base_url=base_url_set
         )
         self.output_file_path = "../data/test/generated_qa.jsonl"
 
     def generate_qa_pair(self, text_chunk: str) -> Optional[dict]:
-        """
-        调用qwen-turbo模型，基于文本块生成一个问答对。
-
-        Args:
-            text_chunk: 用于生成问答对的文本块。
-
-        Returns:
-            包含 'question' 和 'answer' 的字典，如果生成失败则返回 None。
-        """
         prompt = f"""
 请仔细阅读以下文本内容，并严格遵循以下要求生成一个问答对：
 
@@ -52,32 +37,28 @@ class QAPairGenerator:
 
         try:
             response = self.client.chat.completions.create(
-                model="qwen-turbo",
+                model=llm, # 使用 settings.py 中配置的模型名称
                 messages=[
                     {"role": "system", "content": "你是一个专业的问答对生成助手。你会根据给定的文本内容，生成一个准确、具体的问答对，并严格按照JSON格式输出。"},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1,  # 降低温度以获得更确定、更符合指令的输出
+                temperature=0.1,
                 max_tokens=500
             )
 
             response_text = response.choices[0].message.content.strip()
             
-            # 尝试解析模型返回的JSON
-            # 去掉可能的代码块包裹
             if response_text.startswith("```json"):
-                response_text = response_text[7:]  # 去掉 ```json
+                response_text = response_text[7:]
             if response_text.endswith("```"):
-                response_text = response_text[:-3]  # 去掉 ```
+                response_text = response_text[:-3]
             
-            # 内部的 try-except 块，用于处理JSON解析
             try:
                 qa_dict = json.loads(response_text)
             except json.JSONDecodeError as e:
                 print(f"  错误: 无法解析模型返回的JSON: {response_text[:100]}... (错误详情: {e})")
                 return None
             
-            # 验证返回的JSON结构是否符合要求
             if isinstance(qa_dict, dict) and 'question' in qa_dict and 'answer' in qa_dict:
                 return qa_dict
             else:
@@ -86,18 +67,9 @@ class QAPairGenerator:
 
         except Exception as e:
             print(f"  错误: 调用模型生成问答对时出错: {e}")
-            return None # 确保在任何异常情况下都返回 None
+            return None
 
     def process_file(self, file_path: str, window_size: int = 800, min_step: int = 4000, max_step: int = 6000):
-        """
-        处理单个文件，使用滑动窗口生成问答对并保存。
-
-        Args:
-            file_path: 要处理的文件路径。
-            window_size: 滑动窗口的大小（字符数）。
-            min_step: 随机步长的最小值。
-            max_step: 随机步长的最大值。
-        """
         print(f"正在处理文件: {file_path}")
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -115,23 +87,19 @@ class QAPairGenerator:
             
             while start < total_chars:
                 end = start + window_size
-                # 确保不超出文本边界
                 if end > total_chars:
                     end = total_chars
-                    # 如果剩余内容太短，结束循环
-                    if end - start < 10: # 至少需要一点内容
+                    if end - start < 10:
                         break
                 
                 text_chunk = content[start:end]
                 
-                # 跳过全是空白字符的块
                 if text_chunk.strip():
                     chunk_count += 1
                     print(f"  处理第 {chunk_count} 个文本块 (位置: {start}-{end})...")
 
                     qa_pair = self.generate_qa_pair(text_chunk)
                     if qa_pair:
-                        # 将问答对追加到JSONL文件
                         with open(self.output_file_path, 'a', encoding='utf-8') as f_out:
                             f_out.write(json.dumps(qa_pair, ensure_ascii=False) + '\n')
                         successful_gen_count += 1
@@ -141,7 +109,6 @@ class QAPairGenerator:
                 else:
                     print(f"  跳过空白文本块 (位置: {start}-{end})。")
                 
-                # 计算下一个窗口的起始位置
                 step = random.randint(min_step, max_step)
                 start = end + step
 
@@ -155,31 +122,18 @@ class QAPairGenerator:
             print(f"处理文件 {file_path} 时出错: {e}")
 
     def run(self, file_paths: List[str]):
-        """
-        运行生成器，处理指定的文件列表。
-
-        Args:
-            file_paths: 要处理的文件路径列表。
-        """
         print(f"开始生成问答对，输出文件: {self.output_file_path}")
-        # 清空或创建输出文件
         with open(self.output_file_path, 'w', encoding='utf-8') as f:
-            pass # 创建空文件或清空已有内容
+            pass
 
         for file_path in file_paths:
             abs_file_path = os.path.abspath(file_path)
             self.process_file(abs_file_path)
 
 def main():
-    """
-    主函数，供main.py调用。
-    """
-    # main 函数最外层的 try...except 可以捕获其内部任何未被捕获的异常，
-    # 包括 QAPairGenerator 初始化时因 API KEY 缺失而抛出的 ValueError。
     try:
-        generator = QAPairGenerator() # 这里的潜在异常会被下面的 except 捕获
+        generator = QAPairGenerator()
         
-        # 获取文件列表（与main.py中的逻辑类似）
         txt_dir = "../data/src_files/"
         if not os.path.exists(txt_dir):
             print(f"目录 {txt_dir} 不存在")
@@ -207,7 +161,6 @@ def main():
         
         selection_str = input("请选择文件序号: ").strip()
         
-        # 解析选择（与main.py中的parse_selection逻辑类似）
         try:
             selections = selection_str.replace(' ', '').split(',')
             selected_indices = []
@@ -236,20 +189,16 @@ def main():
             print("操作已取消。")
             return
 
-        # 获取绝对路径列表
         file_paths = [os.path.abspath(f"../data/src_files/{filename}") for filename in selected_files]
         
-        # 运行生成器
         generator.run(file_paths)
         print("\n所有选定的文件处理完成！问答对已保存到 generated_qa.jsonl")
 
-    # 这个 except 块会捕获 main 函数内部（包括 QAPairGenerator 初始化）抛出的 ValueError
     except ValueError as e:
         print(f"初始化错误: {e}")
         print("请确保已设置 OPENAI_API_KEY 环境变量。")
     except Exception as e:
         print(f"执行过程中发生未预期的错误: {e}")
-
 
 if __name__ == "__main__":
     main()

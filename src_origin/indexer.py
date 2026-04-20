@@ -7,15 +7,19 @@ from openai import OpenAI
 from typing import List
 from database_manager import DatabaseManager
 
+# 导入 settings.py 中的配置
+from settings import base_url_set, embedding_model
+
 class QwenIndexer:
     def __init__(self):
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("请设置 OPENAI_API_KEY 环境变量")
         
+        # 使用 settings.py 中配置的 base_url
         self.client = OpenAI(
             api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+            base_url=base_url_set
         )
         
         self.chroma_client = chromadb.PersistentClient(path="../data/vectorstore")
@@ -124,7 +128,8 @@ class QwenIndexer:
             print(f"正在为文本块 {i+1}/{len(texts)} 生成 Qwen 嵌入... (大小: {len(text)} 字符)")
             try:
                 response = self.client.embeddings.create(
-                    model="text-embedding-v2",# 嵌入维度:1536
+                    # 使用 settings.py 中配置的模型名称
+                    model=embedding_model,# 嵌入维度:1536
                     input=text
                 )
                 embedding = response.data[0].embedding
