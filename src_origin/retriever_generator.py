@@ -346,6 +346,44 @@ class QwenRetrieverGenerator:
         except Exception as e:
             print(f"调用模型评估相关性时出错: {e}")
             return 0  # 出错时默认完全不相关
+    def query(self, user_input: str) -> str:
+        """完整的 RAG 查询流程（包含重排序）"""
+        print(f"用户输入: {user_input}")
+        
+        # 1. 检索候选文档
+        print(f"正在检索前 {self.initial_retrieve_k} 个候选文档...")
+        candidate_docs = self.retrieve_documents(user_input)
+        
+        if not candidate_docs:
+            response = "抱歉，没有找到相关文档。"
+            self._log_interaction(user_input, response)
+            return response
+        
+        # 2. 显示初始检索结果
+        print("\n初始检索结果（按向量相似度）:")
+        for i, doc in enumerate(candidate_docs):
+            print(f"  #{i+1} 距离: {doc['initial_distance']:.4f} | 来源: {doc['metadata'].get('source', '未知')}")
+        
+        # 3. 对候选文档进行重排序
+        reranked_docs = self.rerank_documents(user_input, candidate_docs)
+        
+        # 4. 显示重排序结果
+        print("\n重排序后结果（按相关性分数）:")
+        for i, doc in enumerate(reranked_docs):
+            print(f"  #{doc['rerank_rank']} 分数: {doc['rerank_score']:.4f} | 来源: {doc['metadata'].get('source', '未知')}")
+        
+        # 5. 选择最终使用的top-k文档
+        final_docs = reranked_docs[:self.final_top_k]
+        print(f"\n选择前 {self.final_top_k} 个最相关片段用于生成回答")
+        
+        # 6. 生成答案
+        print("正在基于精选片段生成答案...")
+        answer = self.generate_answer(user_input, final_docs)
+        
+        # 7. 记录本次交互
+        self._log_interaction(user_input, answer)
+        
+        return answer
 
 def select_test_datasets():
     """让用户选择测试数据集"""
@@ -664,7 +702,6 @@ def evaluate_from_test_data():
         print(f"评估过程中出错: {e}")
         import traceback
         traceback.print_exc() # 添加更详细的错误追踪
-
 
 def interactive_query():
     """交互式查询"""
