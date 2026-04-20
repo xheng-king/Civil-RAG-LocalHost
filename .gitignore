@@ -1,0 +1,23 @@
+# 程序临时缓存
+cache/*
+
+# 数据
+data/exported_collections/*
+data/src_files/*
+data/vectorstore/*
+
+# 虚拟环境
+rag_venv/
+
+# Python 缓存
+__pycache__/
+
+# 系统临时数据
+*.csv
+*.md
+*.json
+*.jsonl
+*.txt
+
+# 测试数据集公开
+!data/test/*
