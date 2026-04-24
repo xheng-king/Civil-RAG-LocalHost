@@ -6,6 +6,7 @@ from indexer import QwenIndexer
 from rag_interface import interactive_query
 from image_captioner import ImageCaptioner
 from qa_generator import main as run_qa_generation
+from traindata_generator import main as run_data_generator
 
 def get_txt_files():
     txt_dir = "../data/src_files/"
@@ -147,8 +148,9 @@ def main():
         print("2. 文本嵌入索引（选择集合存储文本-向量对，非空则清空）")
         print("3. 问答查询（针对选定数据库集合进行问答）")
         print("4. Markdown文件图像处理（调用视觉模型为图片生成描述并附加）")
-        print("5. 从文件生成问答对（用于构建评测集）")
-        print("6. 退出")
+        print("5. 从文本文件生成问答对（用于测评系统）")
+        print("6. 从问答对生成训练数据集（用于微调嵌入模型）")
+        print("7. 退出")
         
         try:
             choice = input("\n请输入选项 (1-5): ").strip()
@@ -295,6 +297,10 @@ def main():
             run_qa_generation()
         
         elif choice == '6':
+            run_data_generator()
+            break
+
+        elif choice == '7':
             print("再见！")
             break
         

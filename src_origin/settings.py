@@ -1,5 +1,11 @@
 # settings.py
 
+# private api
+# base_url_set = "http://1980429930883277.cn-shanghai.pai-eas.aliyuncs.com/api/predict/quickstart_deploy_20260424_11u6/v1"
+
+# embedding_model = "Qwen3-Embedding-4B"
+
+# public api
 base_url_set = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 embedding_model = "text-embedding-v2"
