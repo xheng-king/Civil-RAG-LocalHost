@@ -17,9 +17,9 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 import warnings
 warnings.filterwarnings('ignore')
 
-from settings import base_url_set, llm
+from settings import llm, llm_base_url, llm_API_key
 
-eval_client = OpenAI(base_url=base_url_set, api_key=os.getenv("OPENAI_API_KEY"))
+eval_client = OpenAI(base_url=llm_base_url, api_key=llm_API_key)
 
 def select_test_datasets():
     test_dir = "../data/test"
@@ -131,12 +131,7 @@ def calculate_bleu_score(candidate, reference, max_n=4):
         return 0.0
 
 
-# --- 新增函数：调用大模型判断答案正确性 ---
 def check_answer_correctness(question: str, generated_answer: str, reference_answer: str) -> bool:
-    """
-    使用大模型判断生成的答案是否正确。
-    这是一个示例prompt，您可以根据具体任务调整判断逻辑。
-    """
     prompt = f"""
     你是一个专业的评判员。我会给你一个问题、一个参考标准答案和一个模型生成的答案。
     你的任务是判断模型生成的答案是否正确回答了问题。你可以容忍一些措辞上的差异，但核心意思必须一致。
@@ -151,25 +146,22 @@ def check_answer_correctness(question: str, generated_answer: str, reference_ans
 
     try:
         response = eval_client.chat.completions.create(
-            model=llm, # 使用 settings.py 中定义的模型
+            model=llm,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0, # 设置为0以获得更确定性的输出
-            max_tokens=10, # 预期输出很短
+            temperature=0,
+            max_tokens=10,
         )
         result_text = response.choices[0].message.content.strip().upper()
-        # 检查模型返回的内容是否包含关键词
         if "CORRECT" in result_text:
             return True
         elif "INCORRECT" in result_text:
             return False
         else:
-            # 如果模型没有按预期格式回复，记录并默认视为错误
             print(f"警告: 大模型评估输出格式不符合预期: '{result_text}'. 问题: '{question[:50]}...'. 将此视为错误。")
             return False
     except Exception as e:
         print(f"调用大模型进行准确性评估时出错: {e}. 问题: '{question[:50]}...'. 将此视为错误。")
         return False
-# --- 新增函数结束 ---
 
 def evaluate_from_test_data():
     try:
@@ -190,7 +182,7 @@ def evaluate_from_test_data():
         all_mrr_reranked = []
         all_ndcg_reranked = []
         all_bleu = []
-        all_acc = [] # 新增列表存储准确率结果
+        all_acc = []
         
         for file_path in test_files:
             print(f"\n{'='*60}")
@@ -206,7 +198,7 @@ def evaluate_from_test_data():
             mrr_reranked_scores = []
             ndcg_reranked_scores = []
             bleu_scores = []
-            acc_results = [] # 存储单个数据集的准确率结果 (True/False)
+            acc_results = []
             
             for i, item in enumerate(tqdm(test_data, desc="处理问题")):
                 query = item["question"]
@@ -221,7 +213,7 @@ def evaluate_from_test_data():
                     mrr_reranked_scores.append(0.1)
                     ndcg_reranked_scores.append(0)
                     bleu_scores.append(0)
-                    acc_results.append(False) # 没有文档生成的答案视为错误
+                    acc_results.append(False)
                     continue
                 
                 first_relevant_rank_initial = rag_system.get_relevance_rank(query, candidate_docs)
@@ -262,10 +254,8 @@ def evaluate_from_test_data():
                 bleu_score = calculate_bleu_score(generated_answer, reference_answer)
                 bleu_scores.append(bleu_score)
                 
-                # --- 新增：计算准确率 ---
                 is_correct = check_answer_correctness(query, generated_answer, reference_answer)
                 acc_results.append(is_correct)
-                # --- 新增结束 ---
                 
                 print(f"  问题 #{i+1}: MRR_Init={mrr_initial:.4f}, NDCG_Init={ndcg_initial:.4f}, MRR_Rerank={mrr_reranked:.4f}, NDCG_Rerank={ndcg_reranked:.4f}, BLEU={bleu_score:.4f}, ACC={'CORRECT' if is_correct else 'INCORRECT'}")
             
@@ -274,7 +264,6 @@ def evaluate_from_test_data():
             dataset_mrr_reranked = sum(mrr_reranked_scores) / len(mrr_reranked_scores) if mrr_reranked_scores else 0
             dataset_ndcg_reranked = sum(ndcg_reranked_scores) / len(ndcg_reranked_scores) if ndcg_reranked_scores else 0
             dataset_bleu = sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0
-            # 计算单个数据集的准确率
             dataset_acc = sum(acc_results) / len(acc_results) if acc_results else 0
             
             print(f"\n数据集 {os.path.basename(file_path)} 评估结果:")
@@ -283,21 +272,20 @@ def evaluate_from_test_data():
             print(f"  MRR_Reranked: {dataset_mrr_reranked:.4f}")
             print(f"  NDCG_Reranked: {dataset_ndcg_reranked:.4f}")
             print(f"  BLEU: {dataset_bleu:.4f}")
-            print(f"  ACC: {dataset_acc:.4f}") # 打印单个数据集的准确率
+            print(f"  ACC: {dataset_acc:.4f}")
             
             all_mrr_initial.extend(mrr_initial_scores)
             all_ndcg_initial.extend(ndcg_initial_scores)
             all_mrr_reranked.extend(mrr_reranked_scores)
             all_ndcg_reranked.extend(ndcg_reranked_scores)
             all_bleu.extend(bleu_scores)
-            all_acc.extend(acc_results) # 将单个数据集的结果扩展到总列表
+            all_acc.extend(acc_results)
         
         overall_mrr_initial = sum(all_mrr_initial) / len(all_mrr_initial) if all_mrr_initial else 0
         overall_ndcg_initial = sum(all_ndcg_initial) / len(all_ndcg_initial) if all_ndcg_initial else 0
         overall_mrr_reranked = sum(all_mrr_reranked) / len(all_mrr_reranked) if all_mrr_reranked else 0
         overall_ndcg_reranked = sum(all_ndcg_reranked) / len(all_ndcg_reranked) if all_ndcg_reranked else 0
         overall_bleu = sum(all_bleu) / len(all_bleu) if all_bleu else 0
-        # 计算总体准确率
         overall_acc = sum(all_acc) / len(all_acc) if all_acc else 0
         
         print(f"\n{'='*60}")
@@ -307,7 +295,7 @@ def evaluate_from_test_data():
         print(f"  MRR_Reranked: {overall_mrr_reranked:.4f}")
         print(f"  NDCG_Reranked: {overall_ndcg_reranked:.4f}")
         print(f"  BLEU: {overall_bleu:.4f}")
-        print(f"  ACC: {overall_acc:.4f}") # 打印总体准确率
+        print(f"  ACC: {overall_acc:.4f}")
         print(f"{'='*60}")
         
         result_file = "../evaluation_results.csv"
@@ -319,7 +307,7 @@ def evaluate_from_test_data():
             writer.writerow(["MRR_Reranked", f"{overall_mrr_reranked:.4f}"])
             writer.writerow(["NDCG_Reranked", f"{overall_ndcg_reranked:.4f}"])
             writer.writerow(["BLEU", f"{overall_bleu:.4f}"])
-            writer.writerow(["ACC", f"{overall_acc:.4f}"]) # 添加 ACC 结果到 CSV
+            writer.writerow(["ACC", f"{overall_acc:.4f}"])
         
         print(f"\n评估结果已保存到: {os.path.abspath(result_file)}")
         
@@ -373,7 +361,7 @@ def interactive_query():
                 
     except ValueError as e:
         print(f"错误: {e}")
-        print("请确保已设置 OPENAI_API_KEY 环境变量")
+        print("请确保已正确配置 settings.py 中的 llm_API_key")
     except Exception as e:
         print(f"启动系统时出错: {e}")
 

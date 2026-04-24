@@ -21,3 +21,5 @@ __pycache__/
 
 # 测试数据集公开
 !data/test/*
+
+settings.py

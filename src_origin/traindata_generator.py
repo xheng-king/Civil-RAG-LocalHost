@@ -5,20 +5,21 @@ import chromadb
 from openai import OpenAI
 from typing import List, Dict, Any
 from database_manager import DatabaseManager
-from settings import base_url_set, embedding_model, rerank_model, rerank_base_url
+from settings import base_url_set, embedding_model, embedding_API_key, rerank_model, rerank_base_url, rerank_API_key
 
 
 class TrainingDataGenerator:
     def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("请设置 OPENAI_API_KEY 环境变量")
+        if not embedding_API_key:
+            raise ValueError("settings.py 中的 embedding_API_key 未设置")
+        if not rerank_API_key:
+            raise ValueError("settings.py 中的 rerank_API_key 未设置")
 
-        self.client = OpenAI(api_key=api_key, base_url=base_url_set)
+        self.embedding_client = OpenAI(api_key=embedding_API_key, base_url=base_url_set)
         self.chroma_client = chromadb.PersistentClient(path="../data/vectorstore")
         self.db_manager = DatabaseManager()
         self.collection = None
-        self.initial_retrieve_k = 5  # 召回5个
+        self.initial_retrieve_k = 5
 
     def select_collection(self) -> bool:
         collection_names = self.db_manager.list_collections()
@@ -47,15 +48,14 @@ class TrainingDataGenerator:
                 return False
 
     def embed_query(self, query_text: str) -> List[float]:
-        response = self.client.embeddings.create(model=embedding_model, input=query_text)
+        response = self.embedding_client.embeddings.create(model=embedding_model, input=query_text)
         return response.data[0].embedding
 
     def retrieve_documents(self, query_text: str) -> List[Dict[str, Any]]:
-        # 修复：正确获取向量
         query_embedding = self.embed_query(query_text)
         
         results = self.collection.query(
-            query_embeddings=[query_embedding],  # 修复：必须包成列表
+            query_embeddings=[query_embedding],
             n_results=self.initial_retrieve_k,
             include=['documents', 'metadatas', 'distances']
         )
@@ -81,7 +81,7 @@ class TrainingDataGenerator:
         try:
             import requests
             headers = {
-                "Authorization": f"Bearer {self.client.api_key}",
+                "Authorization": f"Bearer {rerank_API_key}",
                 "Content-Type": "application/json"
             }
             texts = [doc['content'] for doc in documents]
@@ -152,14 +152,10 @@ class TrainingDataGenerator:
                 if not reranked:
                     continue
 
-                # 重排后最高分 = 正例
                 pos_doc = reranked[0]['content']
-
-                # 随机选一个负例
                 neg_candidates = [doc['content'] for doc in reranked[1:]]
                 neg_doc = random.choice(neg_candidates)
 
-                # 输出 PAI 官方 Embedding 微调格式
                 line = {
                     "query": question,
                     "pos": [pos_doc],

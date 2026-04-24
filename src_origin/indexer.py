@@ -7,18 +7,15 @@ from openai import OpenAI
 from typing import List
 from database_manager import DatabaseManager
 
-# 导入 settings.py 中的配置
-from settings import base_url_set, embedding_model
+from settings import base_url_set, embedding_model, embedding_API_key
 
 class QwenIndexer:
     def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("请设置 OPENAI_API_KEY 环境变量")
+        if not embedding_API_key:
+            raise ValueError("settings.py 中的 embedding_API_key 未设置")
         
-        # 使用 settings.py 中配置的 base_url
         self.client = OpenAI(
-            api_key=api_key,
+            api_key=embedding_API_key,
             base_url=base_url_set
         )
         
@@ -37,11 +34,9 @@ class QwenIndexer:
         
         for match in clauses_found:
             clause_end = match.end()
-            chunk_content = text[start : clause_end].strip()
-            
+            chunk_content = text[start:clause_end].strip()
             if chunk_content:
                 chunks.append(chunk_content)
-            
             start = clause_end
         
         if start < len(text):
@@ -80,7 +75,6 @@ class QwenIndexer:
 
             if len(potential_chunk) <= max_chunk_size:
                 current_chunk = potential_chunk
-
                 if len(current_chunk) >= min_chunk_size:
                     final_chunks.append(current_chunk)
                     current_chunk = ""
@@ -128,8 +122,7 @@ class QwenIndexer:
             print(f"正在为文本块 {i+1}/{len(texts)} 生成 Qwen 嵌入... (大小: {len(text)} 字符)")
             try:
                 response = self.client.embeddings.create(
-                    # 使用 settings.py 中配置的模型名称
-                    model=embedding_model,# 嵌入维度:1536
+                    model=embedding_model,
                     input=text
                 )
                 embedding = response.data[0].embedding
@@ -175,19 +168,15 @@ class QwenIndexer:
         
         print(f"成功将 {len(segments)} 个文档从 {os.path.basename(file_path)} 索引到集合 '{collection_name}'")
 
-        # --- 修改：写入 CSV 文件 ---
         chunk_details_csv_path = "../chunk_details.csv"
         file_summary_csv_path = "../file_summary.csv"
 
-        # 1. 写入 chunk_details.csv
         chunk_details_file_exists = os.path.isfile(chunk_details_csv_path)
         with open(chunk_details_csv_path, 'a', newline='', encoding='utf-8') as chunk_csvfile:
             chunk_fieldnames = ['file_name', 'chunk_index', 'length']
             chunk_writer = csv.DictWriter(chunk_csvfile, fieldnames=chunk_fieldnames)
-
             if not chunk_details_file_exists:
                 chunk_writer.writeheader()
-            
             for i, segment in enumerate(segments):
                 chunk_writer.writerow({
                     'file_name': os.path.basename(file_path),
@@ -195,7 +184,6 @@ class QwenIndexer:
                     'length': len(segment),
                 })
 
-        # 2. 写入 file_summary.csv
         total_chunks = len(segments)
         avg_length = sum(len(seg) for seg in segments) / total_chunks if total_chunks > 0 else 0
 
@@ -203,12 +191,10 @@ class QwenIndexer:
         with open(file_summary_csv_path, 'a', newline='', encoding='utf-8') as summary_csvfile:
             summary_fieldnames = ['file_name', 'total_chunks', 'average_chunk_length']
             summary_writer = csv.DictWriter(summary_csvfile, fieldnames=summary_fieldnames)
-
             if not file_summary_file_exists:
                 summary_writer.writeheader()
-            
             summary_writer.writerow({
                 'file_name': os.path.basename(file_path),
                 'total_chunks': total_chunks,
-                'average_chunk_length': round(avg_length, 2) # 保留两位小数
+                'average_chunk_length': round(avg_length, 2)
             })

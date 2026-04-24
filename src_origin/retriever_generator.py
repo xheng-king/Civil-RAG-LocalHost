@@ -12,18 +12,28 @@ import math
 from collections import Counter
 from tqdm import tqdm
 
-from settings import base_url_set, embedding_model, rerank_model, rerank_base_url, llm
+from settings import base_url_set, embedding_model, embedding_API_key, rerank_model, rerank_base_url, rerank_API_key, llm, llm_base_url, llm_API_key
 
 class QwenRetrieverGenerator:
     def __init__(self):
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("请设置 OPENAI_API_KEY 环境变量")
-        
-        self.client = OpenAI(
-            api_key=api_key,
+        # Embedding client
+        if not embedding_API_key:
+            raise ValueError("settings.py 中的 embedding_API_key 未设置")
+        self.embedding_client = OpenAI(
+            api_key=embedding_API_key,
             base_url=base_url_set
         )
+        
+        # LLM client
+        if not llm_API_key:
+            raise ValueError("settings.py 中的 llm_API_key 未设置")
+        self.llm_client = OpenAI(
+            api_key=llm_API_key,
+            base_url=llm_base_url
+        )
+        
+        # 重排序 API key (用于 requests 手动调用)
+        self.rerank_api_key = rerank_API_key
         
         self.chroma_client = chromadb.PersistentClient(path="../data/vectorstore")
         self.db_manager = DatabaseManager()
@@ -33,7 +43,6 @@ class QwenRetrieverGenerator:
 
     def _log_interaction(self, user_input: str, response: str):
         markdown_content = f"Q：{user_input}\nA：{response}\n\n"
-
         try:
             with open(self.log_file_path, 'a', encoding='utf-8') as f:
                 f.write(markdown_content)
@@ -73,8 +82,8 @@ class QwenRetrieverGenerator:
                 return None
     
     def embed_query(self, query_text: str) -> List[float]:
-        response = self.client.embeddings.create(
-            model=embedding_model, # 使用 settings.py 中配置的模型名称
+        response = self.embedding_client.embeddings.create(
+            model=embedding_model,
             input=query_text
         )
         return response.data[0].embedding
@@ -108,26 +117,26 @@ class QwenRetrieverGenerator:
         if not documents:
             return []
 
-        print(f"正在使用DashScope重排序API对{len(documents)}个候选片段进行重排序...")
+        print(f"正在使用重排序API对{len(documents)}个候选片段进行重排序...")
 
         try:
             import requests
             
             headers = {
-                "Authorization": f"Bearer {self.client.api_key}",
+                "Authorization": f"Bearer {self.rerank_api_key}",
                 "Content-Type": "application/json"
             }
 
             texts_to_rerank = [doc['content'] for doc in documents]
             payload = {
-                "model": rerank_model, # 使用 settings.py 中配置的重排序模型名称
+                "model": rerank_model,
                 "documents": texts_to_rerank,
                 "query": query,
                 "top_n": len(documents),
             }
             
             response = requests.post(
-                rerank_base_url, # 使用 settings.py 中配置的重排序API基础URL
+                rerank_base_url,
                 headers=headers,
                 json=payload
             )
@@ -138,7 +147,6 @@ class QwenRetrieverGenerator:
 
             if 'results' in result:
                 api_results = result['results']
-                
                 reranked_docs = []
                 
                 for rank_data in api_results:
@@ -147,11 +155,9 @@ class QwenRetrieverGenerator:
                     
                     if original_index < len(documents):
                         original_doc = documents[original_index]
-                        
                         updated_doc = original_doc.copy()
                         updated_doc['rerank_score'] = relevance_score
                         updated_doc['rerank_rank'] = len(reranked_docs) + 1 
-                        
                         reranked_docs.append(updated_doc)
                     else:
                         print(f"警告: 重排序API返回了无效的索引 {original_index}")
@@ -194,8 +200,8 @@ class QwenRetrieverGenerator:
 """
         
         try:
-            completion = self.client.chat.completions.create(
-                model=llm, # 使用 settings.py 中配置的LLM模型名称
+            completion = self.llm_client.chat.completions.create(
+                model=llm,
                 messages=[
                     {"role": "system", "content": "你是一个专业的知识助手，能够基于提供的多段上下文信息回答用户的问题。"},
                     {"role": "user", "content": prompt}
@@ -210,8 +216,8 @@ class QwenRetrieverGenerator:
             simple_prompt = f"基于以下信息回答问题:\n\n{simple_context}\n\n问题: {query}"
             
             try:
-                completion = self.client.chat.completions.create(
-                    model=llm, # 备用请求也使用配置的模型
+                completion = self.llm_client.chat.completions.create(
+                    model=llm,
                     messages=[{"role": "user", "content": simple_prompt}],
                     max_tokens=600
                 )
@@ -233,8 +239,8 @@ class QwenRetrieverGenerator:
         prompt += "\n\n请只返回一个数字，表示包含答案的文档序号，如果没有包含答案的文档，请返回 0。"
 
         try:
-            completion = self.client.chat.completions.create(
-                model=llm, # 使用配置的模型
+            completion = self.llm_client.chat.completions.create(
+                model=llm,
                 messages=[
                     {"role": "system", "content": "你是一个专业的相关性评估助手。"},
                     {"role": "user", "content": prompt}
@@ -272,8 +278,8 @@ class QwenRetrieverGenerator:
 请只返回一个数字 (0-4) 表示相关性等级。"""
 
         try:
-            completion = self.client.chat.completions.create(
-                model=llm, # 使用配置的模型
+            completion = self.llm_client.chat.completions.create(
+                model=llm,
                 messages=[
                     {"role": "system", "content": "你是一个专业的相关性评估助手。"},
                     {"role": "user", "content": prompt}

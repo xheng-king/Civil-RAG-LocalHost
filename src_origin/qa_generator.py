@@ -3,17 +3,17 @@ import json
 from openai import OpenAI
 from typing import List, Optional
 
-from settings import base_url_set, llm
+from settings import llm, llm_base_url, llm_API_key
 
 class QAPairGenerator:
     def __init__(self, api_key: Optional[str] = None):
-        key_to_use = api_key or os.getenv("OPENAI_API_KEY")
+        key_to_use = api_key or llm_API_key
         if not key_to_use:
-            raise ValueError("请设置 OPENAI_API_KEY 环境变量或在初始化时传入api_key参数")
-
+            raise ValueError("settings.py 中的 llm_API_key 未设置")
+        
         self.client = OpenAI(
             api_key=key_to_use,
-            base_url=base_url_set
+            base_url=llm_base_url
         )
         self.output_file_path = "../data/test/generated_qa.jsonl"
 
@@ -69,10 +69,6 @@ class QAPairGenerator:
             return None
 
     def process_file(self, file_path: str, window_size: int, step: int, max_pairs: int, current_count: int) -> int:
-        """
-        处理单个文件，返回该文件成功生成的问答对数量。
-        current_count: 当前已生成的总数（用于提前终止）
-        """
         print(f"正在处理文件: {file_path}")
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -89,7 +85,6 @@ class QAPairGenerator:
             total_chars = len(content)
             
             while start < total_chars:
-                # 如果已经达到最大数量，停止生成
                 if current_count + successful_gen_count >= max_pairs:
                     print(f"  已达到最大问答对数量 {max_pairs}，停止处理当前文件。")
                     break
@@ -136,7 +131,6 @@ class QAPairGenerator:
         print(f"开始生成问答对，输出文件: {self.output_file_path}")
         print(f"参数: 窗口大小={window_size}, 步长={step}, 最大问答对数量={max_pairs}")
         
-        # 清空输出文件
         with open(self.output_file_path, 'w', encoding='utf-8') as f:
             pass
 
@@ -160,7 +154,6 @@ def main():
             print(f"目录 {txt_dir} 不存在")
             return
         
-        # 1. 先让用户输入参数
         print("\n--- 参数设置 ---")
         while True:
             try:
@@ -194,7 +187,6 @@ def main():
         
         print(f"\n参数确认：窗口大小 = {window_size}，步长 = {step}，最大问答对数量 = {max_pairs}")
         
-        # 2. 列出 src_files 目录中的文件
         all_files = os.listdir(txt_dir)
         txt_files = [f for f in all_files if f.lower().endswith(('.txt', '.md'))]
         sorted_files = sorted(txt_files)
@@ -207,7 +199,6 @@ def main():
         for i, filename in enumerate(sorted_files, 1):
             print(f"  {i}. {filename}")
         
-        # 3. 文件选择
         print("\n请输入要处理的文件序号，支持单选或多选")
         print("例如: 输入 '1' 表示选择第1个文件")
         print("例如: 输入 '1,2,4' 表示选择第1、2、4个文件")
@@ -244,13 +235,12 @@ def main():
 
         file_paths = [os.path.abspath(f"../data/src_files/{filename}") for filename in selected_files]
         
-        # 4. 开始生成
         generator.run(file_paths, window_size, step, max_pairs)
         print("\n处理完成！问答对已保存到 generated_qa.jsonl")
 
     except ValueError as e:
         print(f"初始化错误: {e}")
-        print("请确保已设置 OPENAI_API_KEY 环境变量。")
+        print("请确保 settings.py 中的 llm_API_key 已正确设置。")
     except Exception as e:
         print(f"执行过程中发生未预期的错误: {e}")
 

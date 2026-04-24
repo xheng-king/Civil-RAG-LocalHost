@@ -1,24 +1,24 @@
 # image_captioner.py
-import os
 import re
 import json
 import base64
 from pathlib import Path
 from openai import OpenAI
 
-# 导入 settings.py 中的配置
-from settings import base_url_set, vllm
+# 从 settings.py 导入视觉模型相关配置
+from settings import vllm, vllm_base_url, vllm_API_key
 
 class ImageCaptioner:
     def __init__(self):
-        api_key = os.getenv('OPENAI_API_KEY')
+        # 直接使用 settings 中配置的视觉模型 API Key 和 Base URL
+        api_key = vllm_API_key
         if not api_key:
-            raise ValueError("环境变量 OPENAI_API_KEY 未设置。")
+            raise ValueError("settings.py 中的 vllm_API_key 未设置。")
         
-        # 使用 settings.py 中配置的 base_url
+        # 使用 settings 中配置的 vllm_base_url（通常为视觉模型专用端点）
         self.client = OpenAI(
             api_key=api_key,
-            base_url=base_url_set
+            base_url=vllm_base_url
         )
         
         # 设置项目根目录和缓存目录
@@ -35,7 +35,7 @@ class ImageCaptioner:
             return base64.b64encode(image_file.read()).decode('utf-8')
 
     def call_vision_model(self, image_path):
-        """调用Qwen视觉模型生成图片描述"""
+        """调用视觉模型生成图片描述"""
         base64_image = self.encode_image(image_path)
         
         prompt = (
@@ -47,8 +47,7 @@ class ImageCaptioner:
         )
 
         response = self.client.chat.completions.create(
-            # 使用 settings.py 中配置的模型名称
-            model=vllm,  # 视觉语言模型
+            model=vllm,  # 使用 settings.vllm，例如 "qwen3-vl-flash"
             messages=[
                 {
                     "role": "user",
@@ -57,14 +56,14 @@ class ImageCaptioner:
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}" # 使用Data URL格式
+                                "url": f"data:image/jpeg;base64,{base64_image}"
                             }
                         },
                     ],
                 }
             ],
             max_tokens=300,
-            temperature=0.7,  # 可选参数，控制输出随机性
+            temperature=0.7,
         )
         
         description = response.choices[0].message.content.strip()
@@ -79,13 +78,9 @@ class ImageCaptioner:
 
         print(f"\n开始处理文件: {md_file_path.name}")
         
-        # 读取Markdown文件内容
         with open(md_file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 查找所有图片链接 ![](path) 或 ![alt](path)
-        # 支持相对路径 images/xxx.jpg 或 ./images/xxx.jpg
-        # 也支持类似您示例中的路径 images/uuid.jpg
         img_pattern = r'(!\[([^\]]*)\]\(([^)]+\.(?:jpg|jpeg|png|gif|bmp|webp))\))'
         matches = list(re.finditer(img_pattern, content, re.IGNORECASE))
         
@@ -96,7 +91,6 @@ class ImageCaptioner:
         total_images = len(matches)
         print(f"  - 发现 {total_images} 个图片链接")
 
-        # 加载或初始化进度缓存
         cache_file = self.cache_dir / f"caption_progress_{md_file_path.name}.json"
         processed_links = set()
         if cache_file.exists():
@@ -113,18 +107,15 @@ class ImageCaptioner:
         any_new_caption_added = False
         
         for i, match in enumerate(matches):
-            full_match = match.group(0) # 整个 ![]() 匹配项
-            img_src = match.group(3).strip() # 图片路径部分
+            full_match = match.group(0)
+            img_src = match.group(3).strip()
 
             print(f"    处理第 {i+1}/{total_images} 个图片: {img_src}")
 
-            # 检查是否已处理过
             if img_src in processed_links:
                 print(f"      - 已在缓存中，跳过。")
                 continue
 
-            # 构建图片的绝对路径
-            # 假设图片相对于md文件所在目录（即 src_files/ ）寻找
             img_abs_path = self.src_files_dir / img_src
             
             if not img_abs_path.exists():
@@ -132,21 +123,14 @@ class ImageCaptioner:
                 continue
 
             try:
-                # 调用视觉模型生成描述
                 print(f"      - 正在调用视觉模型...")
                 caption_text = self.call_vision_model(img_abs_path)
                 
-                # 生成注释形式的描述，附加在原链接后面
-                # 使用HTML注释格式，这样不会在渲染时显示，但保留在源码中
                 comment_block = f"\n<!-- 图片描述: {caption_text} -->\n"
-                
-                # 将描述追加到原链接后面
                 updated_content = updated_content.replace(full_match, full_match + comment_block, 1)
                 
-                # 记录已处理的链接
                 processed_links.add(img_src)
                 
-                # 更新缓存文件
                 with open(cache_file, 'w', encoding='utf-8') as cf:
                     json.dump({"completed": list(processed_links)}, cf, ensure_ascii=False, indent=2)
                 
@@ -156,15 +140,13 @@ class ImageCaptioner:
             except Exception as e:
                 print(f"      - 生成描述时出错: {e}")
                 print("      - 跳过此图片，继续处理下一个。")
-                continue # 继续处理下一个图片，不中断整个文件
+                continue
 
-        # 如果有任何新的描述被添加，则写回文件
         if any_new_caption_added:
             print(f"  - 写入更新后的文件: {md_file_path}")
             with open(md_file_path, 'w', encoding='utf-8') as f:
                 f.write(updated_content)
             
-            # 处理完一个文件后，删除对应的缓存记录
             if cache_file.exists():
                 cache_file.unlink()
                 print(f"  - 删除进度缓存: {cache_file.name}")
@@ -175,4 +157,4 @@ class ImageCaptioner:
         """批量处理多个Markdown文件"""
         for path in file_paths:
             self.process_markdown_file(path)
-            print("-" * 40) # 分隔符，便于查看日志
+            print("-" * 40)
