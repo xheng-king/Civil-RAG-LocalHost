@@ -1,0 +1,7 @@
+Metric,Value
+MRR_Initial,0.4394
+NDCG_Initial,0.8691
+MRR_Reranked,0.4470
+NDCG_Reranked,0.9368
+BLEU,0.0803
+ACC,0.6363

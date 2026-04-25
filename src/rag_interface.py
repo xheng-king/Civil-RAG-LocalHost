@@ -133,8 +133,9 @@ def calculate_bleu_score(candidate, reference, max_n=4):
 
 def check_answer_correctness(question: str, generated_answer: str, reference_answer: str) -> bool:
     prompt = f"""
-    你是一个专业的评判员。我会给你一个问题、一个参考标准答案和一个模型生成的答案。
-    你的任务是判断模型生成的答案是否正确回答了问题。你可以容忍一些措辞上的差异，但核心意思必须一致。
+    你是一个专业的评判员。我会给你一个问题、一个参考答案和一个待评价的答案。
+    你的任务是判断待评价答案是否与参考答案一致。你可以容忍一些措辞上的差异。
+    但对于参考答案表示信息不足等情况一律判断为"INCORRECT"
     请严格只回复 "CORRECT" 或 "INCORRECT"。
 
     问题: {question}
@@ -152,12 +153,9 @@ def check_answer_correctness(question: str, generated_answer: str, reference_ans
             max_tokens=10,
         )
         result_text = response.choices[0].message.content.strip().upper()
-        if "CORRECT" in result_text:
+        if "CORRECT" == result_text:
             return True
-        elif "INCORRECT" in result_text:
-            return False
         else:
-            print(f"警告: 大模型评估输出格式不符合预期: '{result_text}'. 问题: '{question[:50]}...'. 将此视为错误。")
             return False
     except Exception as e:
         print(f"调用大模型进行准确性评估时出错: {e}. 问题: '{question[:50]}...'. 将此视为错误。")
