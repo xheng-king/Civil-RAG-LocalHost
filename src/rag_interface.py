@@ -1,3 +1,4 @@
+# rag_interface.py
 import os
 import chromadb
 from openai import OpenAI
@@ -76,21 +77,32 @@ def load_test_data(file_path):
         print(f"加载测试数据时出错: {e}")
         return []
 
-def calculate_dcg(grades):
-    dcg = 0
-    for i, grade in enumerate(grades):
-        dcg += (2**grade - 1) / math.log2(i + 2)
+def calculate_dcg_from_scores(scores):
+    """根据分数列表计算 DCG，分数直接作为增益"""
+    dcg = 0.0
+    for i, score in enumerate(scores):
+        gain = 2 ** score - 1
+        dcg += gain / math.log2(i + 2)
     return dcg
 
-def calculate_idcg(grades):
-    sorted_grades = sorted(grades, reverse=True)
-    return calculate_dcg(sorted_grades)
+def calc_mrr(scores):
+    """根据分数列表计算 MRR（最高分文档视为唯一相关文档）"""
+    if not scores:
+        return 0.1
+    # 分数越高越好，找到最高分的索引（0‑based），排名为 index+1
+    max_idx = max(range(len(scores)), key=lambda i: scores[i])
+    rank = max_idx + 1
+    return 1.0 / rank if rank <= 5 else 0.1
 
-def get_ngrams(text, n):
-    tokens = text.split()
-    ngrams = []
-    for i in range(len(tokens) - n + 1):
-        ngrams.append(tuple(tokens[i:i+n]))
+def calc_ndcg(scores):
+    """根据分数列表计算 NDCG"""
+    if not scores:
+        return 0.0
+    dcg = calculate_dcg_from_scores(scores)
+    # 理想排序：将分数降序排列
+    ideal_scores = sorted(scores, reverse=True)
+    idcg = calculate_dcg_from_scores(ideal_scores)
+    return dcg / idcg if idcg > 0 else 0.0
     return ngrams
 
 def calculate_bleu_score(candidate, reference, max_n=4):
@@ -175,10 +187,8 @@ def evaluate_from_test_data():
             print("未选择测试数据集，退出评估")
             return
         
-        all_mrr_initial = []
-        all_ndcg_initial = []
-        all_mrr_reranked = []
-        all_ndcg_reranked = []
+        all_mrr = []
+        all_ndcg = []
         all_bleu = []
         all_acc = []
         
@@ -191,10 +201,8 @@ def evaluate_from_test_data():
             if not test_data:
                 continue
             
-            mrr_initial_scores = []
-            ndcg_initial_scores = []
-            mrr_reranked_scores = []
-            ndcg_reranked_scores = []
+            mrr_scores = []
+            ndcg_scores = []
             bleu_scores = []
             acc_results = []
             
@@ -202,96 +210,85 @@ def evaluate_from_test_data():
                 query = item["question"]
                 reference_answer = item["answer"]
                 
+                # 初次召回
                 candidate_docs = rag_system.retrieve_documents(query)
                 
                 if not candidate_docs:
                     print(f"  问题 #{i+1}: 未检索到任何文档")
-                    mrr_initial_scores.append(0.1)
-                    ndcg_initial_scores.append(0)
-                    mrr_reranked_scores.append(0.1)
-                    ndcg_reranked_scores.append(0)
-                    bleu_scores.append(0)
+                    mrr_scores.append(0.1)
+                    ndcg_scores.append(0.0)
+                    bleu_scores.append(0.0)
                     acc_results.append(False)
                     continue
                 
-                first_relevant_rank_initial = rag_system.get_relevance_rank(query, candidate_docs)
-                mrr_initial = 1.0 / first_relevant_rank_initial if first_relevant_rank_initial <= 5 else 0.1
-                mrr_initial_scores.append(mrr_initial)
-                
-                grades_initial = []
-                for doc in candidate_docs:
-                    grade = rag_system.get_relevance_grade(query, doc)
-                    grades_initial.append(grade)
-                
-                dcg_initial = calculate_dcg(grades_initial)
-                idcg_initial = calculate_idcg(grades_initial)
-                
-                ndcg_initial = dcg_initial / idcg_initial if idcg_initial > 0 else 0
-                ndcg_initial_scores.append(ndcg_initial)
-                
+                # 使用重排序模型为初始列表打分（不改变原始顺序）
+                # 调用 rerank_documents，它会返回按 rerank_score 降序的列表
                 reranked_docs = rag_system.rerank_documents(query, candidate_docs)
                 
-                first_relevant_rank_reranked = rag_system.get_relevance_rank(query, reranked_docs)
-                mrr_reranked = 1.0 / first_relevant_rank_reranked if first_relevant_rank_reranked <= 5 else 0.1
-                mrr_reranked_scores.append(mrr_reranked)
+                # 将重排序分数映射回原始顺序的文档列表
+                # 建立 id -> rerank_score 的映射（id 在检索时生成）
+                rerank_score_map = {}
+                for rd in reranked_docs:
+                    if 'rerank_score' in rd and rd['rerank_score'] is not None:
+                        rerank_score_map[rd['id']] = rd['rerank_score']
                 
-                grades_reranked = []
-                for doc in reranked_docs:
-                    grade = rag_system.get_relevance_grade(query, doc)
-                    grades_reranked.append(grade)
+                # 如果重排序完全失败（所有文档都无 rerank_score），回退到使用 ChromaDB 相似度
+                if not rerank_score_map:
+                    print(f"  问题 #{i+1}: 重排序失败，使用初始相似度作为评估分数")
+                    scores_for_eval = [doc.get('score', 0.0) for doc in candidate_docs]
+                else:
+                    # 对每个原始文档，取其 rerank_score，若缺失则用 0
+                    scores_for_eval = []
+                    for doc in candidate_docs:
+                        scores_for_eval.append(rerank_score_map.get(doc['id'], 0.0))
                 
-                dcg_reranked = calculate_dcg(grades_reranked)
-                idcg_reranked = calculate_idcg(grades_reranked)
+                # 计算 MRR 和 NDCG（基于上述分数）
+                mrr = calc_mrr(scores_for_eval)
+                ndcg = calc_ndcg(scores_for_eval)
+                mrr_scores.append(mrr)
+                ndcg_scores.append(ndcg)
                 
-                ndcg_reranked = dcg_reranked / idcg_reranked if idcg_reranked > 0 else 0
-                ndcg_reranked_scores.append(ndcg_reranked)
+                # 生成答案（仍然使用重排序后的前 final_top_k 个文档）
+                final_docs = reranked_docs[:rag_system.final_top_k]
+                generated_answer = rag_system.generate_answer(query, final_docs)
                 
-                final_docs_for_generation = reranked_docs[:rag_system.final_top_k]
-                generated_answer = rag_system.generate_answer(query, final_docs_for_generation)
-
+                # BLEU
                 bleu_score = calculate_bleu_score(generated_answer, reference_answer)
                 bleu_scores.append(bleu_score)
                 
+                # ACC（调用大模型）
                 is_correct = check_answer_correctness(query, generated_answer, reference_answer)
                 acc_results.append(is_correct)
                 
-                print(f"  问题 #{i+1}: MRR_Init={mrr_initial:.4f}, NDCG_Init={ndcg_initial:.4f}, MRR_Rerank={mrr_reranked:.4f}, NDCG_Rerank={ndcg_reranked:.4f}, BLEU={bleu_score:.4f}, ACC={'CORRECT' if is_correct else 'INCORRECT'}")
+                print(f"  问题 #{i+1}: MRR={mrr:.4f}, NDCG={ndcg:.4f}, BLEU={bleu_score:.4f}, ACC={'CORRECT' if is_correct else 'INCORRECT'}")
             
-            dataset_mrr_initial = sum(mrr_initial_scores) / len(mrr_initial_scores) if mrr_initial_scores else 0
-            dataset_ndcg_initial = sum(ndcg_initial_scores) / len(ndcg_initial_scores) if ndcg_initial_scores else 0
-            dataset_mrr_reranked = sum(mrr_reranked_scores) / len(mrr_reranked_scores) if mrr_reranked_scores else 0
-            dataset_ndcg_reranked = sum(ndcg_reranked_scores) / len(ndcg_reranked_scores) if ndcg_reranked_scores else 0
+            # 数据集汇总
+            dataset_mrr = sum(mrr_scores) / len(mrr_scores) if mrr_scores else 0
+            dataset_ndcg = sum(ndcg_scores) / len(ndcg_scores) if ndcg_scores else 0
             dataset_bleu = sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0
             dataset_acc = sum(acc_results) / len(acc_results) if acc_results else 0
             
             print(f"\n数据集 {os.path.basename(file_path)} 评估结果:")
-            print(f"  MRR_Initial: {dataset_mrr_initial:.4f}")
-            print(f"  NDCG_Initial: {dataset_ndcg_initial:.4f}")
-            print(f"  MRR_Reranked: {dataset_mrr_reranked:.4f}")
-            print(f"  NDCG_Reranked: {dataset_ndcg_reranked:.4f}")
+            print(f"  MRR: {dataset_mrr:.4f}")
+            print(f"  NDCG: {dataset_ndcg:.4f}")
             print(f"  BLEU: {dataset_bleu:.4f}")
             print(f"  ACC: {dataset_acc:.4f}")
             
-            all_mrr_initial.extend(mrr_initial_scores)
-            all_ndcg_initial.extend(ndcg_initial_scores)
-            all_mrr_reranked.extend(mrr_reranked_scores)
-            all_ndcg_reranked.extend(ndcg_reranked_scores)
+            all_mrr.extend(mrr_scores)
+            all_ndcg.extend(ndcg_scores)
             all_bleu.extend(bleu_scores)
             all_acc.extend(acc_results)
         
-        overall_mrr_initial = sum(all_mrr_initial) / len(all_mrr_initial) if all_mrr_initial else 0
-        overall_ndcg_initial = sum(all_ndcg_initial) / len(all_ndcg_initial) if all_ndcg_initial else 0
-        overall_mrr_reranked = sum(all_mrr_reranked) / len(all_mrr_reranked) if all_mrr_reranked else 0
-        overall_ndcg_reranked = sum(all_ndcg_reranked) / len(all_ndcg_reranked) if all_ndcg_reranked else 0
+        # 总体结果
+        overall_mrr = sum(all_mrr) / len(all_mrr) if all_mrr else 0
+        overall_ndcg = sum(all_ndcg) / len(all_ndcg) if all_ndcg else 0
         overall_bleu = sum(all_bleu) / len(all_bleu) if all_bleu else 0
         overall_acc = sum(all_acc) / len(all_acc) if all_acc else 0
         
         print(f"\n{'='*60}")
         print("总体评估结果:")
-        print(f"  MRR_Initial: {overall_mrr_initial:.4f}")
-        print(f"  NDCG_Initial: {overall_ndcg_initial:.4f}")
-        print(f"  MRR_Reranked: {overall_mrr_reranked:.4f}")
-        print(f"  NDCG_Reranked: {overall_ndcg_reranked:.4f}")
+        print(f"  MRR: {overall_mrr:.4f}")
+        print(f"  NDCG: {overall_ndcg:.4f}")
         print(f"  BLEU: {overall_bleu:.4f}")
         print(f"  ACC: {overall_acc:.4f}")
         print(f"{'='*60}")
@@ -300,10 +297,8 @@ def evaluate_from_test_data():
         with open(result_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(["Metric", "Value"])
-            writer.writerow(["MRR_Initial", f"{overall_mrr_initial:.4f}"])
-            writer.writerow(["NDCG_Initial", f"{overall_ndcg_initial:.4f}"])
-            writer.writerow(["MRR_Reranked", f"{overall_mrr_reranked:.4f}"])
-            writer.writerow(["NDCG_Reranked", f"{overall_ndcg_reranked:.4f}"])
+            writer.writerow(["MRR", f"{overall_mrr:.4f}"])
+            writer.writerow(["NDCG", f"{overall_ndcg:.4f}"])
             writer.writerow(["BLEU", f"{overall_bleu:.4f}"])
             writer.writerow(["ACC", f"{overall_acc:.4f}"])
         
@@ -313,6 +308,7 @@ def evaluate_from_test_data():
         print(f"评估过程中出错: {e}")
         import traceback
         traceback.print_exc()
+
 
 def interactive_query():
     try:

@@ -1,0 +1,5 @@
+Metric,Value
+MRR,0.5999
+NDCG,0.9615
+BLEU,0.0575
+ACC,0.4285

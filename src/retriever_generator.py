@@ -1,3 +1,4 @@
+# retriever_generator.py
 import os
 import chromadb
 from openai import OpenAI
@@ -108,6 +109,7 @@ class QwenRetrieverGenerator:
                 'content': doc,
                 'metadata': meta,
                 'initial_distance': dist,
+                'score': 1.0 - dist,          # 新增：余弦相似度分数，供评估使用
                 'rerank_score': None
             })
         
