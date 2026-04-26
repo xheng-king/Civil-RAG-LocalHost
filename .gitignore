@@ -26,3 +26,4 @@ __pycache__/
 !data/result/*
 
 !requirements.txt
+!README.md
