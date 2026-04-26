@@ -1,7 +1,7 @@
 # ft:fine-tuned embedding, fl:flare retriever-generator, hard:hard test set
 
 Metric,Value
-MRR,0.5135
-NDCG,0.9531
-BLEU,0.0551
-ACC,0.5804
+MRR,0.4972
+NDCG,0.9586
+BLEU,0.0556
+ACC,0.5179

@@ -24,5 +24,3 @@ __pycache__/
 
 # 测试结果公开
 !data/result/*
-
-settings.py

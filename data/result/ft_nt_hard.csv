@@ -1,2 +1,7 @@
 # ft:fine-tuned embedding, nt:native retriever-generator, hard:hard test set
 
+Metric,Value
+MRR,0.5499
+NDCG,0.9655
+BLEU,0.0512
+ACC,0.4464

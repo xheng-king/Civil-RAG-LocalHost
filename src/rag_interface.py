@@ -209,8 +209,6 @@ def evaluate_from_test_data():
                 query = item["question"]
                 reference_answer = item["answer"]
                 
-                # --- 核心修改：使用自适应查询逻辑 ---
-                
                 # 定义一个闭包评估器，捕获当前的 reference_answer
                 def local_evaluator(generated_ans):
                     return check_answer_correctness(query, generated_ans, reference_answer)
@@ -230,49 +228,8 @@ def evaluate_from_test_data():
                 # 3. MRR & NDCG
                 # 基于最终那一轮（成功或最后一轮）的 candidate_docs 和它们的 rerank_score
                 if candidate_docs:
-                    # 我们需要从 final_docs 或者重新获取的 rerank 结果中得到分数
-                    # 注意：rag_system.query 返回的 final_docs 是截取后的，但 candidate_docs 是原始的
-                    # 为了计算 MRR/NDCG，我们需要 candidate_docs 中每个文档的 rerank_score
-                    
-                    # 由于 _execute_single_round 内部调用了 _rerank_all_documents，但没有返回所有带分数的文档
-                    # 我们需要一种方式获取所有 candidate_docs 的 rerank_score。
-                    # 简单方法：在这里重新调用一次 rerank_documents（不带 top_n 限制，或者手动获取所有分数）
-                    # 但为了效率，最好修改 retriever_generator 返回所有带分数的文档。
-                    # 鉴于当前代码结构，我们可以在这里手动构建分数列表：
-                    
-                    # 方案：利用 final_docs 中的分数映射？不行，因为 final_docs 只有前 K 个。
-                    # 方案：重新调用一次轻量级的 rerank？或者修改 retriever_generator。
-                    # 让我们修改 retriever_generator 的 _execute_single_round 返回值，或者在这里重新计算。
-                    # 为了最小化改动，我们在这里重新调用 rag_system._rerank_all_documents (如果是 public) 
-                    # 但它是 private。
-                    
-                    # 更好的方式：修改 retriever_generator.py 中的 _execute_single_round 返回 all_reranked_docs
-                    # 我在上面的 retriever_generator.py 代码中已经做了修改吗？
-                    # 没有，我只返回了 final_docs 和 candidates。
-                    # 让我们在这里做一个简单的处理：
-                    # 如果 ENABLE_ADAPTIVE_RETRIEVAL 为真，我们假设用户关心的是最终结果。
-                    # 我们可以从 final_docs 中提取分数，但这不足以计算基于所有 candidate 的 NDCG。
-                    
-                    # **修正策略**：
-                    # 在 retriever_generator.py 中，我将修改 _execute_single_round 以返回所有重排序后的文档列表。
-                    # 请看下面的 retriever_generator.py 更新。
-                    
-                    # 临时解决方案：如果 candidate_docs 不为空，我们尝试从 final_docs 中推断，或者重新排序。
-                    # 为了准确，我将在 retriever_generator 中增加一个返回值。
-                    pass 
+                                        pass 
 
-                # 由于上面的逻辑依赖 retriever_generator 的返回值，请参考下方最新的 retriever_generator.py
-                # 假设 retriever_generator 现在返回: answer, final_docs, all_reranked_docs, candidate_docs
-                # 但我上面给出的代码只返回了3个值。
-                # 让我们调整 rag_interface 以适配上面给出的 retriever_generator 代码。
-                
-                # 上面给出的 retriever_generator 代码中：
-                # return answer, final_docs_for_llm, candidate_docs
-                # 并没有返回所有带分数的文档。
-                
-                # 为了计算 MRR/NDCG，我们需要所有 candidate_docs 的 rerank_score。
-                # 我们可以在这里调用 rag_system.rerank_documents(query, candidate_docs, top_n=len(candidate_docs))
-                # 这会再次调用 API，但能保证数据准确。
                 
                 if candidate_docs:
                     # 重新获取所有文档的重排序分数
