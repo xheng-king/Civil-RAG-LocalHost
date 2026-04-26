@@ -1,0 +1,7 @@
+# # pt:pre-training embedding, fl:flare retriever-generator, hard:hard test set
+
+Metric,Value
+MRR,0.5235
+NDCG,0.9602
+BLEU,0.0571
+ACC,0.5982

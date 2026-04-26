@@ -1,0 +1,7 @@
+# pt:pre-training embedding, nt:native retriever-generator, easy:easy test set
+
+Metric,Value
+MRR,0.6709
+NDCG,0.9547
+BLEU,0.1989
+ACC,0.7267

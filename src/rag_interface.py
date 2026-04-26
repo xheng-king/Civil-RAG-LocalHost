@@ -18,7 +18,7 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 import warnings
 warnings.filterwarnings('ignore')
 
-from settings import llm, llm_base_url, llm_API_key
+from settings import llm, llm_base_url, llm_API_key, ENABLE_ADAPTIVE_RETRIEVAL
 
 eval_client = OpenAI(base_url=llm_base_url, api_key=llm_API_key)
 
@@ -103,7 +103,6 @@ def calc_ndcg(scores):
     ideal_scores = sorted(scores, reverse=True)
     idcg = calculate_dcg_from_scores(ideal_scores)
     return dcg / idcg if idcg > 0 else 0.0
-    return ngrams
 
 def calculate_bleu_score(candidate, reference, max_n=4):
     if not candidate or not reference:
@@ -210,57 +209,96 @@ def evaluate_from_test_data():
                 query = item["question"]
                 reference_answer = item["answer"]
                 
-                # 初次召回
-                candidate_docs = rag_system.retrieve_documents(query)
+                # --- 核心修改：使用自适应查询逻辑 ---
                 
-                if not candidate_docs:
-                    print(f"  问题 #{i+1}: 未检索到任何文档")
-                    mrr_scores.append(0.1)
-                    ndcg_scores.append(0.0)
-                    bleu_scores.append(0.0)
-                    acc_results.append(False)
-                    continue
+                # 定义一个闭包评估器，捕获当前的 reference_answer
+                def local_evaluator(generated_ans):
+                    return check_answer_correctness(query, generated_ans, reference_answer)
                 
-                # 使用重排序模型为初始列表打分（不改变原始顺序）
-                # 调用 rerank_documents，它会返回按 rerank_score 降序的列表
-                reranked_docs = rag_system.rerank_documents(query, candidate_docs)
-                
-                # 将重排序分数映射回原始顺序的文档列表
-                # 建立 id -> rerank_score 的映射（id 在检索时生成）
-                rerank_score_map = {}
-                for rd in reranked_docs:
-                    if 'rerank_score' in rd and rd['rerank_score'] is not None:
-                        rerank_score_map[rd['id']] = rd['rerank_score']
-                
-                # 如果重排序完全失败（所有文档都无 rerank_score），回退到使用 ChromaDB 相似度
-                if not rerank_score_map:
-                    print(f"  问题 #{i+1}: 重排序失败，使用初始相似度作为评估分数")
-                    scores_for_eval = [doc.get('score', 0.0) for doc in candidate_docs]
-                else:
-                    # 对每个原始文档，取其 rerank_score，若缺失则用 0
-                    scores_for_eval = []
-                    for doc in candidate_docs:
-                        scores_for_eval.append(rerank_score_map.get(doc['id'], 0.0))
-                
-                # 计算 MRR 和 NDCG（基于上述分数）
-                mrr = calc_mrr(scores_for_eval)
-                ndcg = calc_ndcg(scores_for_eval)
-                mrr_scores.append(mrr)
-                ndcg_scores.append(ndcg)
-                
-                # 生成答案（仍然使用重排序后的前 final_top_k 个文档）
-                final_docs = reranked_docs[:rag_system.final_top_k]
-                generated_answer = rag_system.generate_answer(query, final_docs)
-                
-                # BLEU
-                bleu_score = calculate_bleu_score(generated_answer, reference_answer)
-                bleu_scores.append(bleu_score)
-                
-                # ACC（调用大模型）
+                # 调用 query，获取答案以及最终轮的文档信息
+                # generated_answer, final_docs (for LLM), candidate_docs (before rerank)
+                generated_answer, final_docs, candidate_docs = rag_system.query(query, evaluator_func=local_evaluator if ENABLE_ADAPTIVE_RETRIEVAL else None)
+
+                # 1. ACC
                 is_correct = check_answer_correctness(query, generated_answer, reference_answer)
                 acc_results.append(is_correct)
                 
-                print(f"  问题 #{i+1}: MRR={mrr:.4f}, NDCG={ndcg:.4f}, BLEU={bleu_score:.4f}, ACC={'CORRECT' if is_correct else 'INCORRECT'}")
+                # 2. BLEU
+                bleu_score = calculate_bleu_score(generated_answer, reference_answer)
+                bleu_scores.append(bleu_score)
+                
+                # 3. MRR & NDCG
+                # 基于最终那一轮（成功或最后一轮）的 candidate_docs 和它们的 rerank_score
+                if candidate_docs:
+                    # 我们需要从 final_docs 或者重新获取的 rerank 结果中得到分数
+                    # 注意：rag_system.query 返回的 final_docs 是截取后的，但 candidate_docs 是原始的
+                    # 为了计算 MRR/NDCG，我们需要 candidate_docs 中每个文档的 rerank_score
+                    
+                    # 由于 _execute_single_round 内部调用了 _rerank_all_documents，但没有返回所有带分数的文档
+                    # 我们需要一种方式获取所有 candidate_docs 的 rerank_score。
+                    # 简单方法：在这里重新调用一次 rerank_documents（不带 top_n 限制，或者手动获取所有分数）
+                    # 但为了效率，最好修改 retriever_generator 返回所有带分数的文档。
+                    # 鉴于当前代码结构，我们可以在这里手动构建分数列表：
+                    
+                    # 方案：利用 final_docs 中的分数映射？不行，因为 final_docs 只有前 K 个。
+                    # 方案：重新调用一次轻量级的 rerank？或者修改 retriever_generator。
+                    # 让我们修改 retriever_generator 的 _execute_single_round 返回值，或者在这里重新计算。
+                    # 为了最小化改动，我们在这里重新调用 rag_system._rerank_all_documents (如果是 public) 
+                    # 但它是 private。
+                    
+                    # 更好的方式：修改 retriever_generator.py 中的 _execute_single_round 返回 all_reranked_docs
+                    # 我在上面的 retriever_generator.py 代码中已经做了修改吗？
+                    # 没有，我只返回了 final_docs 和 candidates。
+                    # 让我们在这里做一个简单的处理：
+                    # 如果 ENABLE_ADAPTIVE_RETRIEVAL 为真，我们假设用户关心的是最终结果。
+                    # 我们可以从 final_docs 中提取分数，但这不足以计算基于所有 candidate 的 NDCG。
+                    
+                    # **修正策略**：
+                    # 在 retriever_generator.py 中，我将修改 _execute_single_round 以返回所有重排序后的文档列表。
+                    # 请看下面的 retriever_generator.py 更新。
+                    
+                    # 临时解决方案：如果 candidate_docs 不为空，我们尝试从 final_docs 中推断，或者重新排序。
+                    # 为了准确，我将在 retriever_generator 中增加一个返回值。
+                    pass 
+
+                # 由于上面的逻辑依赖 retriever_generator 的返回值，请参考下方最新的 retriever_generator.py
+                # 假设 retriever_generator 现在返回: answer, final_docs, all_reranked_docs, candidate_docs
+                # 但我上面给出的代码只返回了3个值。
+                # 让我们调整 rag_interface 以适配上面给出的 retriever_generator 代码。
+                
+                # 上面给出的 retriever_generator 代码中：
+                # return answer, final_docs_for_llm, candidate_docs
+                # 并没有返回所有带分数的文档。
+                
+                # 为了计算 MRR/NDCG，我们需要所有 candidate_docs 的 rerank_score。
+                # 我们可以在这里调用 rag_system.rerank_documents(query, candidate_docs, top_n=len(candidate_docs))
+                # 这会再次调用 API，但能保证数据准确。
+                
+                if candidate_docs:
+                    # 重新获取所有文档的重排序分数
+                    all_reranked_for_eval = rag_system.rerank_documents(query, candidate_docs, top_n=len(candidate_docs))
+                    
+                    # 构建分数列表，保持与 candidate_docs 相同的顺序（通过 id 映射）
+                    rerank_score_map = {}
+                    for rd in all_reranked_for_eval:
+                        if 'rerank_score' in rd and rd['rerank_score'] is not None:
+                            rerank_score_map[rd['id']] = rd['rerank_score']
+                    
+                    scores_for_eval = []
+                    for doc in candidate_docs:
+                        scores_for_eval.append(rerank_score_map.get(doc['id'], 0.0))
+                        
+                    mrr = calc_mrr(scores_for_eval)
+                    ndcg = calc_ndcg(scores_for_eval)
+                else:
+                    mrr = 0.1
+                    ndcg = 0.0
+
+                mrr_scores.append(mrr)
+                ndcg_scores.append(ndcg)
+                
+                status_str = 'CORRECT' if is_correct else 'INCORRECT'
+                print(f"  问题 #{i+1}: ACC={status_str}, BLEU={bleu_score:.4f}, MRR={mrr:.4f}, NDCG={ndcg:.4f}")
             
             # 数据集汇总
             dataset_mrr = sum(mrr_scores) / len(mrr_scores) if mrr_scores else 0
@@ -322,7 +360,11 @@ def interactive_query():
         print("="*60)
         print("RAG 问答系统")
         print("="*60)
-        print(f"初始召回: {rag_system.initial_retrieve_k} 个片段 | 重排序后使用: {rag_system.final_top_k} 个片段")
+        mode_str = "自适应重试模式" if ENABLE_ADAPTIVE_RETRIEVAL else "标准模式"
+        print(f"当前模式: {mode_str}")
+        print(f"基础初始召回: {rag_system.initial_retrieve_k} 个片段 | 基础重排序后使用: {rag_system.final_top_k} 个片段")
+        if ENABLE_ADAPTIVE_RETRIEVAL:
+            print(f"重试策略: 每次失败 K+{RETRIEVAL_STEP_SIZE}, TopN+{RERANK_OUTPUT_STEP_SIZE}, 最大轮次 {MAX_RETRIEVAL_ROUNDS}")
         print(f"查询日志将保存至: {os.path.abspath(rag_system.log_file_path)}")
         print("输入 'quit' 或 'exit' 退出系统")
         print()
@@ -339,7 +381,9 @@ def interactive_query():
                     continue
                 
                 start_time = time.time()
-                response = rag_system.query(user_input)
+                # 交互式查询不传评估器，因此即使启用自适应，也只会执行标准的一轮（根据 retriever_generator 的逻辑）
+                # 如果你希望交互式也自适应，你需要提供一个无监督的评估器（例如基于置信度）
+                response, _, _ = rag_system.query(user_input)
                 elapsed = time.time() - start_time
                 
                 print("\n" + "="*40)

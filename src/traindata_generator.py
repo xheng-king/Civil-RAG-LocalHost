@@ -1,230 +1,201 @@
 import os
 import json
 import random
-import chromadb
-from openai import OpenAI
-from typing import List, Dict, Any
-from database_manager import DatabaseManager
-from settings import base_url_set, embedding_model, embedding_API_key, rerank_model, rerank_base_url, rerank_API_key
+import time
+from typing import List, Dict
 
-
-class TrainingDataGenerator:
+class SwiftDataGenerator:
     def __init__(self):
-        if not embedding_API_key:
-            raise ValueError("settings.py 中的 embedding_API_key 未设置")
-        if not rerank_API_key:
-            raise ValueError("settings.py 中的 rerank_API_key 未设置")
+        pass
 
-        self.embedding_client = OpenAI(api_key=embedding_API_key, base_url=base_url_set)
-        self.chroma_client = chromadb.PersistentClient(path="../data/vectorstore")
-        self.db_manager = DatabaseManager()
-        self.collection = None
-        self.initial_retrieve_k = 5
-
-    def select_collection(self) -> bool:
-        collection_names = self.db_manager.list_collections()
-        if not collection_names:
-            print("没有可用的集合，请先创建或索引一些数据")
-            return False
-
-        print("\n请选择要查询的集合:")
-        for i, name in enumerate(collection_names, 1):
-            print(f"  {i}. {name}")
-
-        while True:
-            try:
-                choice = int(input(f"\n请选择 (1-{len(collection_names)}): "))
-                if 1 <= choice <= len(collection_names):
-                    selected_name = collection_names[choice - 1]
-                    self.collection = self.chroma_client.get_collection(name=selected_name)
-                    print(f"已选择集合: {selected_name}")
-                    return True
-                else:
-                    print(f"请输入 1 到 {len(collection_names)} 之间的数字")
-            except ValueError:
-                print("请输入有效的数字")
-            except EOFError:
-                print("\n操作取消")
-                return False
-
-    def embed_query(self, query_text: str) -> List[float]:
-        response = self.embedding_client.embeddings.create(model=embedding_model, input=query_text)
-        return response.data[0].embedding
-
-    def retrieve_documents(self, query_text: str) -> List[Dict[str, Any]]:
-        query_embedding = self.embed_query(query_text)
-        
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=self.initial_retrieve_k,
-            include=['documents', 'metadatas', 'distances']
-        )
-        
-        documents = results['documents'][0] or []
-        metadatas = results['metadatas'][0] or []
-        distances = results['distances'][0] or []
-
-        retrieved = []
-        for i, (doc, meta, dist) in enumerate(zip(documents, metadatas, distances)):
-            retrieved.append({
-                'id': i,
-                'content': doc,
-                'metadata': meta,
-                'initial_distance': dist,
-                'rerank_score': None
-            })
-        return retrieved
-
-    def rerank_documents(self, query: str, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if not documents:
-            return []
-        try:
-            import requests
-            headers = {
-                "Authorization": f"Bearer {rerank_API_key}",
-                "Content-Type": "application/json"
-            }
-            texts = [doc['content'] for doc in documents]
-            payload = {
-                "model": rerank_model,
-                "documents": texts,
-                "query": query,
-                "top_n": len(documents)
-            }
-            response = requests.post(rerank_base_url, headers=headers, json=payload)
-            response.raise_for_status()
-            result = response.json()
-
-            if 'results' in result:
-                reranked = []
-                for rank_data in result['results']:
-                    idx = rank_data['index']
-                    score = rank_data['relevance_score']
-                    if idx < len(documents):
-                        doc = documents[idx].copy()
-                        doc['rerank_score'] = score
-                        reranked.append(doc)
-                reranked.sort(key=lambda x: x['rerank_score'], reverse=True)
-                return reranked
-        except Exception as e:
-            print(f"  重排序失败: {e}")
-        return documents
-
-    def process_qa_file(self, file_path: str, output_dir: str, max_triplets: int, total_generated: List[int]) -> bool:
-        print(f"\n处理文件: {file_path}")
+    def load_qa_pairs(self, file_path: str) -> List[Dict[str, str]]:
         qa_pairs = []
+        print(f"正在加载文件: {file_path}")
+        
         with open(file_path, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    qa = json.loads(line)
-                    if 'question' in qa and 'answer' in qa:
-                        qa_pairs.append(qa)
-                except json.JSONDecodeError as e:
-                    print(f"  行 {line_num} JSON 解析错误: {e}，跳过")
+            content = f.read().strip()
+            if not content:
+                return []
+            
+            try:
+                if content.startswith('['):
+                    data = json.loads(content)
+                    if isinstance(data, list):
+                        for item in data:
+                            if 'question' in item and 'answer' in item:
+                                q = str(item['question']).strip()
+                                a = str(item['answer']).strip()
+                                if q and a:
+                                    qa_pairs.append({'question': q, 'answer': a})
+                else:
+                    f.seek(0) 
+                    for line in f:
+                        line = line.strip()
+                        if not line: continue
+                        try:
+                            item = json.loads(line)
+                            if 'question' in item and 'answer' in item:
+                                q = str(item['question']).strip()
+                                a = str(item['answer']).strip()
+                                if q and a:
+                                    qa_pairs.append({'question': q, 'answer': a})
+                        except json.JSONDecodeError:
+                            continue
+            except json.JSONDecodeError:
+                print("文件格式解析失败")
+                return []
 
-        if not qa_pairs:
-            print(f"  无有效问答对")
+        print(f"  成功加载 {len(qa_pairs)} 个有效问答对")
+        return qa_pairs
+
+    def generate_pairs_for_file(self, file_path: str, output_dir: str, max_global_count: int, current_count: List[int]) -> bool:
+        qa_pairs = self.load_qa_pairs(file_path)
+        
+        if len(qa_pairs) < 2:
+            print("  问答对数量不足，跳过。")
             return False
+
+        all_answers = [qa['answer'] for qa in qa_pairs]
+        all_questions = [qa['question'] for qa in qa_pairs]
+        total_pairs = len(qa_pairs)
 
         base_name = os.path.basename(file_path)
         name_without_ext = os.path.splitext(base_name)[0]
-        output_file = os.path.join(output_dir, f"{name_without_ext}_training.jsonl")
+        output_file = os.path.join(output_dir, f"{name_without_ext}_swift_pairs.jsonl")
         os.makedirs(output_dir, exist_ok=True)
 
+        written_count = 0
+        
         with open(output_file, 'w', encoding='utf-8') as f_out:
-            file_written = 0
-            for idx, qa in enumerate(qa_pairs, 1):
-                if total_generated[0] >= max_triplets:
+            for qa in qa_pairs:
+                if current_count[0] >= max_global_count:
+                    return True 
+
+                query = qa['question']
+                pos_doc = qa['answer']
+
+                # 1. 写入正例 (Label 1.0)
+                pos_pair = {
+                    "query": query,
+                    "response": pos_doc,
+                    "label": 1.0
+                }
+                f_out.write(json.dumps(pos_pair, ensure_ascii=False) + "\n")
+                current_count[0] += 1
+                written_count += 1
+
+                if current_count[0] >= max_global_count:
                     break
 
-                question = qa['question']
-                print(f"  处理 {idx}/{len(qa_pairs)}: {question[:50]}...")
+                # 2. 写入负例 (Label 0.0)
+                neg_doc = ""
+                retry_count = 0
+                while retry_count < 5:
+                    neg_idx = random.randint(0, total_pairs - 1)
+                    candidate_neg = all_answers[neg_idx]
+                    
+                    if candidate_neg != pos_doc and candidate_neg != query and len(candidate_neg) > 5:
+                        neg_doc = candidate_neg
+                        break
+                    retry_count += 1
+                
+                if neg_doc:
+                    neg_pair = {
+                        "query": query,
+                        "response": neg_doc,
+                        "label": 0.0
+                    }
+                    f_out.write(json.dumps(neg_pair, ensure_ascii=False) + "\n")
+                    current_count[0] += 1
+                    written_count += 1
 
-                candidates = self.retrieve_documents(question)
-                if len(candidates) < 2:
-                    print(f"    文档不足，跳过")
-                    continue
-
-                reranked = self.rerank_documents(question, candidates)
-                if not reranked:
-                    continue
-
-                pos_doc = reranked[0]['content']
-                neg_candidates = [doc['content'] for doc in reranked[1:]]
-                neg_doc = random.choice(neg_candidates)
-
-                line = {
-                    "query": question,
-                    "pos": [pos_doc],
-                    "neg": [neg_doc]
-                }
-                f_out.write(json.dumps(line, ensure_ascii=False) + "\n")
-                total_generated[0] += 1
-                file_written += 1
-
-        print(f"  本文件生成 {file_written} 条 → {output_file}")
-        return total_generated[0] >= max_triplets
+        print(f"  本文件生成 {written_count} 条 Pair 数据 → {output_file}")
+        return current_count[0] >= max_global_count
 
     def run(self):
-        if not self.select_collection():
-            return
-
-        print("\n--- 参数设置 ---")
+        print("\n--- SWIFT Embedding 数据生成器 (Pair+Label 模式) ---")
+        
         while True:
             try:
-                max_triplets = int(input("最大三元组个数: ").strip())
-                if max_triplets > 0:
+                max_input = input("请输入期望生成的最大数据对总数 (默认 1000): ").strip()
+                max_count = int(max_input) if max_input else 1000
+                if max_count > 0:
                     break
+                else:
+                    print("请输入正整数")
             except ValueError:
-                print("请输入正整数")
+                print("请输入有效的数字")
 
         test_dir = "../data/test/"
         if not os.path.exists(test_dir):
-            print(f"目录不存在: {test_dir}")
+            print(f"错误: 目录不存在: {test_dir}")
             return
 
         qa_files = sorted([f for f in os.listdir(test_dir) if f.lower().endswith(('.jsonl', '.json'))])
         if not qa_files:
-            print("未找到问答文件")
+            print("未找到问答文件 (.json 或 .jsonl)")
             return
 
         print("\n可用文件：")
         for i, f in enumerate(qa_files, 1):
             print(f"  {i}. {f}")
 
-        selection = input("\n选择序号（如 1,2,3）：").strip()
-        try:
-            selected = [int(x) - 1 for x in selection.replace(" ", "").split(",")]
-            selected = [i for i in selected if 0 <= i < len(qa_files)]
-        except:
-            print("输入错误")
-            return
+        selection = input("\n请选择要处理的文件序号 (如 1,2,3 或全部留空): ").strip()
+        
+        selected_indices = []
+        if not selection:
+            selected_indices = list(range(len(qa_files)))
+            print("已选择所有文件")
+        else:
+            try:
+                selected_indices = [int(x) - 1 for x in selection.replace(" ", "").split(",")]
+                selected_indices = [i for i in selected_indices if 0 <= i < len(qa_files)]
+                if not selected_indices:
+                    print("没有选择有效的文件")
+                    return
+            except ValueError:
+                print("输入格式错误")
+                return
 
         output_dir = "../data/training"
-        total_generated = [0]
-        for i in selected:
+        current_count = [0] 
+        
+        start_time = time.time()
+        
+        for i in selected_indices:
             fname = qa_files[i]
             full_path = os.path.join(test_dir, fname)
-            self.process_qa_file(full_path, output_dir, max_triplets, total_generated)
-            if total_generated[0] >= max_triplets:
+            
+            print(f"\n>>> 处理文件 [{i+1}/{len(selected_indices)}]: {fname}")
+            
+            stop_flag = self.generate_pairs_for_file(
+                full_path, 
+                output_dir, 
+                max_count, 
+                current_count
+            )
+            
+            if stop_flag:
+                print("\n已达到最大生成数量限制，停止处理。")
                 break
 
-        print(f"\n✅ 全部完成！共生成 {total_generated[0]} 条 JSONL 训练数据")
-        print(f"📂 路径：../data/training/xxx_training.jsonl")
+        end_time = time.time()
+        print(f"\n✅ 全部完成！")
+        print(f"📊 共生成 {current_count[0]} 条训练数据")
+        print(f"📂 保存路径：{output_dir}")
+        print(f"⏱️ 耗时: {end_time - start_time:.2f} 秒")
 
 
 def main():
     try:
-        generator = TrainingDataGenerator()
+        generator = SwiftDataGenerator()
         generator.run()
     except KeyboardInterrupt:
-        print("\n用户中断")
+        print("\n用户中断操作")
     except Exception as e:
-        print(f"错误: {e}")
-
+        print(f"发生错误: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
