@@ -76,6 +76,6 @@ python src/main.py
 若需对测试集进行批量性能评估：
 
 ```bash
-python src/evaluator.py
+python src/rag_interface.py
 ```
-评估结果将保存至项目根目录下，请注意移动至其他位置如/data/result，否则下次评估将对其覆盖
+评估结果将保存至项目根目录下，请注意及时将评估结果移动至其他位置如/data/result，否则下次评估将对其覆盖
