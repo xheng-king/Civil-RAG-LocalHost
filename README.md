@@ -18,7 +18,7 @@
 
 1.  **克隆项目**
     ```bash
-    git clone <your-repo-url>
+    git clone https://github.com/xheng-king/Civil-RAG-LocalHost.git
     cd rag_ce
     ```
 
