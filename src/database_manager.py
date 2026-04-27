@@ -1,3 +1,4 @@
+# database_manager.py
 import chromadb
 import os
 

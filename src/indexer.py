@@ -1,4 +1,4 @@
-# src/indexer.py
+indexer.py
 import os
 import re
 import chromadb
