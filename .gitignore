@@ -25,5 +25,8 @@ __pycache__/
 # 测试结果公开
 !data/result/*
 
+# 训练数据集
+!data/training/*
+
 !requirements.txt
 !README.md
