@@ -4,7 +4,7 @@ import chromadb
 from openai import OpenAI
 from typing import List, Dict, Any
 from database_manager import DatabaseManager
-from retriever_generator import QwenRetrieverGenerator
+from retriever_generator import RetrieverGenerator
 import time
 import json
 from datetime import datetime
@@ -105,6 +105,7 @@ def calc_ndcg(scores):
     return dcg / idcg if idcg > 0 else 0.0
 
 def calculate_bleu_score(candidate, reference, max_n=4):
+    """计算 BLEU 分数，使用 jieba 进行中文分词，并使用 nltk 的 sentence_bleu 进行计算"""
     if not candidate or not reference:
         return 0.0
 
@@ -307,7 +308,7 @@ def evaluate_from_test_data():
 
 def interactive_query():
     try:
-        rag_system = QwenRetrieverGenerator()
+        rag_system = RetrieverGenerator()
         
         collection_name = rag_system.select_collection()
         if not collection_name:

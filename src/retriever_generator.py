@@ -25,7 +25,7 @@ from settings import (
     BASE_INITIAL_RETRIEVE_K, BASE_FINAL_TOP_K
 )
 
-class QwenRetrieverGenerator:
+class RetrieverGenerator:
     def __init__(self):
         # Embedding client
         if not embedding_API_key:
