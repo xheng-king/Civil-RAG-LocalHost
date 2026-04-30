@@ -57,10 +57,11 @@
 
 ### 启动交互界面
 
-运行主程序进入命令行交互模式：
+本项目重在算法逻辑的实现，运行时**请在src文件夹内运行，如在项目根目录或其他文件夹将无法运行项目**
+在src/文件夹下，运行主程序进入命令行交互模式：
 
 ```bash
-python src/main.py
+python main.py
 ```
 
 在交互界面中，您可以：
@@ -76,6 +77,6 @@ python src/main.py
 若需对测试集进行批量性能评估：
 
 ```bash
-python src/rag_interface.py
+python rag_interface.py
 ```
 评估结果将保存至项目根目录下，请注意及时将评估结果移动至其他位置如/data/result，否则下次评估将对其覆盖
