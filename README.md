@@ -19,7 +19,7 @@
 1.  **克隆项目**
     ```bash
     git clone https://github.com/xheng-king/Civil-RAG-LocalHost.git
-    cd rag_ce
+    cd Civil-RAG-LocalHost
     ```
 
 2.  **创建虚拟环境并安装依赖**

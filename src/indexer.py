@@ -23,7 +23,7 @@ class Indexer:
         self.db_manager = DatabaseManager()
 
     def blocks(self, text: str) -> List[str]:
-        #基于正则表达式识别土木工程规范条款号，将文本初步分割为条款块
+        # 基于正则表达式识别土木工程规范条款号，将文本初步分割为条款块
         clause_pattern = r'\n\s*(?:\d+(?:\.\d+)+~)?\d+(?:\.\d+)+\s+'
         clauses_found = list(re.finditer(clause_pattern, text))
         
@@ -58,7 +58,7 @@ class Indexer:
         return s[start:end]
 
     def structural_chunk(self, text: str, min_chunk_size: int = 512, max_chunk_size: int = 2048) -> List[str]:
-        #执行结构化分块算法，合并短条款或拆分长条款，确保分块长度在指定范围内
+        # 执行结构化分块算法，合并短条款或拆分长条款，确保分块长度在指定范围内
         initial_chunks = self.blocks(text)
         final_chunks = []
         current_chunk = ""
