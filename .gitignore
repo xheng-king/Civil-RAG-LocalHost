@@ -7,7 +7,7 @@ data/src_files/*
 data/vectorstore/*
 
 # 虚拟环境
-rag_venv/
+venv/
 
 # Python 缓存
 __pycache__/

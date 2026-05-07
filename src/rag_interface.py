@@ -175,7 +175,7 @@ def check_answer_correctness(question: str, generated_answer: str, reference_ans
 
 def evaluate_from_test_data():
     try:
-        rag_system = QwenRetrieverGenerator()
+        rag_system = RetrieverGenerator()
         
         collection_name = rag_system.select_collection()
         if not collection_name:
