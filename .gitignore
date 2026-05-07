@@ -2,31 +2,16 @@
 cache/*
 
 # 数据
-data/exported_collections/*
-data/src_files/*
-data/vectorstore/*
+data/*
+!data/test/
+!data/result/
+!data/training/
 
 # 虚拟环境
 venv/
 
 # Python 缓存
 __pycache__/
-
-# 系统临时数据
-*.csv
-*.md
-*.json
-*.jsonl
-*.txt
-
-# 测试数据集公开
-!data/test/*
-
-# 测试结果公开
-!data/result/*
-
-# 训练数据集
-!data/training/*
 
 !requirements.txt
 !README.md
