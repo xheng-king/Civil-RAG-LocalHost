@@ -6,6 +6,7 @@ data/*
 !data/test/
 !data/result/
 !data/training/
+!data/src_files/
 
 # 虚拟环境
 venv/

@@ -8,6 +8,7 @@ from rag_interface import interactive_query
 from image_captioner import ImageCaptioner
 from qa_generator import main as run_qa_generation
 from traindata_generator import main as run_data_generator
+from auto_label import main as run_auto_label
 
 def get_txt_files():
     txt_dir = "../data/src_files/"
@@ -150,8 +151,9 @@ def main():
         print("3. 问答查询（针对选定数据库集合进行问答）")
         print("4. Markdown文件图像处理（调用视觉模型为图片生成描述并附加）")
         print("5. 从文本文件生成问答对（用于测评系统）")
-        print("6. 从问答对生成训练数据集（用于微调嵌入模型）")
-        print("7. 退出")
+        print("6. 从问答对生成初始训练数据集")
+        print("7. 对初始训练集自动标注")
+        print("8. 退出")
         
         try:
             choice = input("\n请输入选项 (1-5): ").strip()
@@ -231,7 +233,7 @@ def main():
             print(f"\n已选择以下文件: {selected_files}")
             
             try:
-                indexer = QwenIndexer()
+                indexer = Indexer()
                 
                 collection_names = indexer.db_manager.list_collections()
                 
@@ -302,6 +304,10 @@ def main():
             break
 
         elif choice == '7':
+            run_auto_label()
+            break
+
+        elif choice == '8':
             print("再见！")
             break
         
