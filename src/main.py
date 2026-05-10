@@ -4,7 +4,7 @@ import json
 import numpy as np
 from database_manager import DatabaseManager
 from indexer import Indexer
-from rag_interface import interactive_query
+from generator import run_interactive, run_evaluation
 from image_captioner import ImageCaptioner
 from qa_generator import main as run_qa_generation
 from traindata_generator import main as run_data_generator
@@ -153,7 +153,8 @@ def main():
         print("5. 从文本文件生成问答对（用于测评系统）")
         print("6. 从问答对生成初始训练数据集")
         print("7. 对初始训练集自动标注")
-        print("8. 退出")
+        print("8. 系统评测")
+        print("9. 退出")
         
         try:
             choice = input("\n请输入选项 (1-5): ").strip()
@@ -291,7 +292,7 @@ def main():
         
         elif choice == '3':
             print("\n--- 问答查询 ---")
-            interactive_query()
+            run_interactive()
 
         elif choice == '4':
             handle_image_captioning()
@@ -308,6 +309,10 @@ def main():
             break
 
         elif choice == '8':
+            run_evaluation()
+            break
+
+        elif choice == '9':
             print("再见！")
             break
         
