@@ -1,5 +1,6 @@
 # rag_interface.py
 import os
+import re
 import chromadb
 from openai import OpenAI
 from typing import List, Dict, Any
@@ -7,11 +8,9 @@ from database_manager import DatabaseManager
 from retriever_generator import RetrieverGenerator
 import time
 import json
-from datetime import datetime
 import csv
 import glob
 import math
-from collections import Counter
 from tqdm import tqdm
 import jieba
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
@@ -77,71 +76,123 @@ def load_test_data(file_path):
         print(f"加载测试数据时出错: {e}")
         return []
 
+def calc_mrr(scores):
+    """根据分数列表计算 MRR（最高分文档视为唯一相关文档）[已弃用，保留兼容]"""
+    if not scores:
+        return 0.1
+    max_idx = max(range(len(scores)), key=lambda i: scores[i])
+    rank = max_idx + 1
+    return 1.0 / rank if rank <= 5 else 0.1
+
+def extract_chinese_chars(text: str) -> str:
+    """提取字符串中的所有中文字符（Unicode 4E00-9FFF）"""
+    return re.sub(r'[^\u4e00-\u9fff]', '', text)
+
+def char_coverage(doc_text: str, ref_text: str) -> float:
+    """
+    计算文档中出现的参考答案中文字符所占比例（基于字符集合的交集）
+    返回覆盖率（0~1）
+    """
+    doc_chinese = set(extract_chinese_chars(doc_text))
+    ref_chinese = set(extract_chinese_chars(ref_text))
+    if not ref_chinese:
+        return 0.0
+    common = doc_chinese.intersection(ref_chinese)
+    return len(common) / len(ref_chinese)
+
+def is_document_relevant_by_coverage(doc_content: str, ref_answer: str, threshold: float = 0.6) -> bool:
+    """根据字符覆盖率判断文档是否相关（仅用于MRR的阈值判定）"""
+    cov = char_coverage(doc_content, ref_answer)
+    print(cov)  # 可选调试输出
+    return cov >= threshold
+
+def calc_mrr_by_coverage(reranked_docs: List[Dict], ref_answer: str, threshold: float = 0.6) -> float:
+    """
+    基于字符覆盖率计算的 MRR：
+    在重排序后的文档列表中，找到第一个相关文档（覆盖率 >= threshold）的排名，返回倒数排名。
+    若无相关文档，返回 0.0。
+    """
+    for rank, doc in enumerate(reranked_docs, start=1):
+        if is_document_relevant_by_coverage(doc.get('content', ''), ref_answer, threshold):
+            return 1.0 / rank
+    return 0.0
+
+def calc_ndcg_by_coverage(reranked_docs: List[Dict], ref_answer: str) -> float:
+    """
+    基于字符覆盖率计算的 NDCG：
+    使用每个文档的覆盖率作为相关性分数（连续值），计算 NDCG。
+    reranked_docs: 已按重排序模型排序的文档列表（顺序即为评估顺序）
+    """
+    if not reranked_docs:
+        return 0.0
+    
+    dcg = 0.0
+    for i, doc in enumerate(reranked_docs):
+        score = char_coverage(doc.get('content', ''), ref_answer)
+        gain = 2 ** score - 1
+        dcg += gain / math.log2(i + 2)
+    
+    scores = [char_coverage(doc.get('content', ''), ref_answer) for doc in reranked_docs]
+    ideal_scores = sorted(scores, reverse=True)
+    idcg = 0.0
+    for i, score in enumerate(ideal_scores):
+        gain = 2 ** score - 1
+        idcg += gain / math.log2(i + 2)
+    
+    return dcg / idcg if idcg > 0 else 0.0
+
+# 保留原 calc_ndcg 函数（不再使用，仅兼容）
 def calculate_dcg_from_scores(scores):
-    """根据分数列表计算 DCG，分数直接作为增益"""
     dcg = 0.0
     for i, score in enumerate(scores):
         gain = 2 ** score - 1
         dcg += gain / math.log2(i + 2)
     return dcg
 
-def calc_mrr(scores):
-    """根据分数列表计算 MRR（最高分文档视为唯一相关文档）"""
-    if not scores:
-        return 0.1
-    # 分数越高越好，找到最高分的索引（0‑based），排名为 index+1
-    max_idx = max(range(len(scores)), key=lambda i: scores[i])
-    rank = max_idx + 1
-    return 1.0 / rank if rank <= 5 else 0.1
-
 def calc_ndcg(scores):
-    """根据分数列表计算 NDCG"""
     if not scores:
         return 0.0
     dcg = calculate_dcg_from_scores(scores)
-    # 理想排序：将分数降序排列
     ideal_scores = sorted(scores, reverse=True)
     idcg = calculate_dcg_from_scores(ideal_scores)
     return dcg / idcg if idcg > 0 else 0.0
 
-def calculate_bleu_score(candidate, reference, max_n=4):
-    """计算 BLEU 分数，使用 jieba 进行中文分词，并使用 nltk 的 sentence_bleu 进行计算"""
-    if not candidate or not reference:
+def calculate_bleu_score(candidate: str, reference: str) -> float:
+    """
+    计算 BLEU 分数（仅中文字符，3-gram，等权重）
+    1. 提取候选和参考答案中的中文字符
+    2. 将中文字符串视为字符列表（每个汉字为一个 token）
+    3. 生成 1-gram、2-gram、3-gram，均匀权重 (1/3, 1/3, 1/3)
+    """
+    # 提取中文字符
+    candidate_zh = extract_chinese_chars(candidate)
+    reference_zh = extract_chinese_chars(reference)
+    
+    if not candidate_zh or not reference_zh:
         return 0.0
-
+    
+    # 转换为字符列表
+    candidate_tokens = list(candidate_zh)
+    reference_tokens = list(reference_zh)
+    
+    # 生成 n-gram 权重（均匀）
+    weights = (1/3, 1/3, 1/3)
+    smoothing = SmoothingFunction().method1
+    
+    # BLEU 要求将 references 包装成列表形式
+    references = [reference_tokens]
+    
     try:
-        candidate_tokens = jieba.lcut(candidate.strip())
-        reference_tokens = jieba.lcut(reference.strip())
-
-        if not isinstance(candidate_tokens, list) or not isinstance(reference_tokens, list):
-            print(f"分词结果类型错误: candidate type={type(candidate_tokens)}, reference type={type(reference_tokens)}")
-            return 0.0
-
-        if len(candidate_tokens) == 0:
-            return 0.0
-
-        weights = (0.25, 0.25, 0.25, 0.25)
-        chencherry = SmoothingFunction()
-        
-        references_for_nltk = [reference_tokens]
-        hypothesis_for_nltk = candidate_tokens
-        
-        bleu_score = sentence_bleu(
-            references=references_for_nltk,
-            hypothesis=hypothesis_for_nltk,
+        bleu = sentence_bleu(
+            references,
+            candidate_tokens,
             weights=weights,
-            smoothing_function=chencherry.method1
+            smoothing_function=smoothing
         )
-
-        return bleu_score
-
+        return bleu
     except Exception as e:
-        import traceback
-        print(f"计算 BLEU 时发生异常: {e}")
-        traceback.print_exc()
-        print(f"  Candidate: '{candidate}', Reference: '{reference}'")
+        print(f"计算 BLEU 时出错: {e}")
         return 0.0
-
 
 def check_answer_correctness(question: str, generated_answer: str, reference_answer: str) -> bool:
     prompt = f"""
@@ -165,10 +216,7 @@ def check_answer_correctness(question: str, generated_answer: str, reference_ans
             max_tokens=10,
         )
         result_text = response.choices[0].message.content.strip().upper()
-        if "CORRECT" == result_text:
-            return True
-        else:
-            return False
+        return result_text == "CORRECT"
     except Exception as e:
         print(f"调用大模型进行准确性评估时出错: {e}. 问题: '{question[:50]}...'. 将此视为错误。")
         return False
@@ -187,93 +235,99 @@ def evaluate_from_test_data():
             print("未选择测试数据集，退出评估")
             return
         
+        # 创建结果目录
+        result_dir = "../data/result"
+        os.makedirs(result_dir, exist_ok=True)
+        
+        # 汇总结果 CSV 文件路径
+        csv_path = os.path.join(result_dir, "evaluation_results.csv")
+        # 每条查询详细结果 JSONL 文件路径
+        jsonl_path = os.path.join(result_dir, "per_query_results.jsonl")
+        
         all_mrr = []
         all_ndcg = []
         all_bleu = []
         all_acc = []
         
-        for file_path in test_files:
-            print(f"\n{'='*60}")
-            print(f"开始评估数据集: {os.path.basename(file_path)}")
-            print(f"{'='*60}")
-            
-            test_data = load_test_data(file_path)
-            if not test_data:
-                continue
-            
-            mrr_scores = []
-            ndcg_scores = []
-            bleu_scores = []
-            acc_results = []
-            
-            for i, item in enumerate(tqdm(test_data, desc="处理问题")):
-                query = item["question"]
-                reference_answer = item["answer"]
+        # 打开 JSONL 文件（覆盖写入）
+        with open(jsonl_path, 'w', encoding='utf-8') as jsonl_file:
+            for file_path in test_files:
+                print(f"\n{'='*60}")
+                print(f"开始评估数据集: {os.path.basename(file_path)}")
+                print(f"{'='*60}")
                 
-                # 定义一个闭包评估器，捕获当前的 reference_answer
-                def local_evaluator(generated_ans):
-                    return check_answer_correctness(query, generated_ans, reference_answer)
+                test_data = load_test_data(file_path)
+                if not test_data:
+                    continue
                 
-                # 调用 query，获取答案以及最终轮的文档信息
-                # generated_answer, final_docs (for LLM), candidate_docs (before rerank)
-                generated_answer, final_docs, candidate_docs = rag_system.query(query, evaluator_func=local_evaluator if ENABLE_ADAPTIVE_RETRIEVAL else None)
-
-                # 1. ACC
-                is_correct = check_answer_correctness(query, generated_answer, reference_answer)
-                acc_results.append(is_correct)
+                mrr_scores = []
+                ndcg_scores = []
+                bleu_scores = []
+                acc_results = []
                 
-                # 2. BLEU
-                bleu_score = calculate_bleu_score(generated_answer, reference_answer)
-                bleu_scores.append(bleu_score)
-                
-                # 3. MRR & NDCG
-                # 基于最终那一轮（成功或最后一轮）的 candidate_docs 和它们的 rerank_score
-                if candidate_docs:
-                                        pass 
-
-                
-                if candidate_docs:
-                    # 重新获取所有文档的重排序分数
-                    all_reranked_for_eval = rag_system.rerank_documents(query, candidate_docs, top_n=len(candidate_docs))
+                for i, item in enumerate(tqdm(test_data, desc="处理问题")):
+                    query = item["question"]
+                    reference_answer = item["answer"]
                     
-                    # 构建分数列表，保持与 candidate_docs 相同的顺序（通过 id 映射）
-                    rerank_score_map = {}
-                    for rd in all_reranked_for_eval:
-                        if 'rerank_score' in rd and rd['rerank_score'] is not None:
-                            rerank_score_map[rd['id']] = rd['rerank_score']
+                    def local_evaluator(generated_ans):
+                        return check_answer_correctness(query, generated_ans, reference_answer)
                     
-                    scores_for_eval = []
-                    for doc in candidate_docs:
-                        scores_for_eval.append(rerank_score_map.get(doc['id'], 0.0))
-                        
-                    mrr = calc_mrr(scores_for_eval)
-                    ndcg = calc_ndcg(scores_for_eval)
-                else:
-                    mrr = 0.1
-                    ndcg = 0.0
-
-                mrr_scores.append(mrr)
-                ndcg_scores.append(ndcg)
+                    generated_answer, final_docs, candidate_docs = rag_system.query(
+                        query, 
+                        evaluator_func=local_evaluator if ENABLE_ADAPTIVE_RETRIEVAL else None
+                    )
+                    
+                    # 1. ACC
+                    is_correct = check_answer_correctness(query, generated_answer, reference_answer)
+                    acc_results.append(is_correct)
+                    
+                    # 2. BLEU
+                    bleu_score = calculate_bleu_score(generated_answer, reference_answer)
+                    bleu_scores.append(bleu_score)
+                    
+                    # 3. MRR & NDCG
+                    if candidate_docs:
+                        all_reranked_for_eval = rag_system.rerank_documents(query, candidate_docs, top_n=len(candidate_docs))
+                        mrr = calc_mrr_by_coverage(all_reranked_for_eval, reference_answer, threshold=0.7)
+                        ndcg = calc_ndcg_by_coverage(all_reranked_for_eval, reference_answer)
+                    else:
+                        mrr = 0.0
+                        ndcg = 0.0
+                    
+                    mrr_scores.append(mrr)
+                    ndcg_scores.append(ndcg)
+                    
+                    # 写入 JSONL：每条查询的详细信息
+                    per_query_record = {
+                        "query": query,
+                        "reference_answer": reference_answer,
+                        "generated_answer": generated_answer,
+                        "acc": 1 if is_correct else 0,
+                        "bleu": bleu_score,
+                        "mrr": mrr,
+                        "ndcg": ndcg
+                    }
+                    jsonl_file.write(json.dumps(per_query_record, ensure_ascii=False) + '\n')
+                    
+                    status_str = 'CORRECT' if is_correct else 'INCORRECT'
+                    print(f"  问题 #{i+1}: ACC={status_str}, BLEU={bleu_score:.4f}, MRR={mrr:.4f}, NDCG={ndcg:.4f}")
                 
-                status_str = 'CORRECT' if is_correct else 'INCORRECT'
-                print(f"  问题 #{i+1}: ACC={status_str}, BLEU={bleu_score:.4f}, MRR={mrr:.4f}, NDCG={ndcg:.4f}")
-            
-            # 数据集汇总
-            dataset_mrr = sum(mrr_scores) / len(mrr_scores) if mrr_scores else 0
-            dataset_ndcg = sum(ndcg_scores) / len(ndcg_scores) if ndcg_scores else 0
-            dataset_bleu = sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0
-            dataset_acc = sum(acc_results) / len(acc_results) if acc_results else 0
-            
-            print(f"\n数据集 {os.path.basename(file_path)} 评估结果:")
-            print(f"  MRR: {dataset_mrr:.4f}")
-            print(f"  NDCG: {dataset_ndcg:.4f}")
-            print(f"  BLEU: {dataset_bleu:.4f}")
-            print(f"  ACC: {dataset_acc:.4f}")
-            
-            all_mrr.extend(mrr_scores)
-            all_ndcg.extend(ndcg_scores)
-            all_bleu.extend(bleu_scores)
-            all_acc.extend(acc_results)
+                # 数据集汇总
+                dataset_mrr = sum(mrr_scores) / len(mrr_scores) if mrr_scores else 0
+                dataset_ndcg = sum(ndcg_scores) / len(ndcg_scores) if ndcg_scores else 0
+                dataset_bleu = sum(bleu_scores) / len(bleu_scores) if bleu_scores else 0
+                dataset_acc = sum(acc_results) / len(acc_results) if acc_results else 0
+                
+                print(f"\n数据集 {os.path.basename(file_path)} 评估结果:")
+                print(f"  MRR: {dataset_mrr:.4f}")
+                print(f"  NDCG: {dataset_ndcg:.4f}")
+                print(f"  BLEU: {dataset_bleu:.4f}")
+                print(f"  ACC: {dataset_acc:.4f}")
+                
+                all_mrr.extend(mrr_scores)
+                all_ndcg.extend(ndcg_scores)
+                all_bleu.extend(bleu_scores)
+                all_acc.extend(acc_results)
         
         # 总体结果
         overall_mrr = sum(all_mrr) / len(all_mrr) if all_mrr else 0
@@ -289,8 +343,8 @@ def evaluate_from_test_data():
         print(f"  ACC: {overall_acc:.4f}")
         print(f"{'='*60}")
         
-        result_file = "../evaluation_results.csv"
-        with open(result_file, 'w', newline='', encoding='utf-8') as f:
+        # 保存汇总 CSV
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(["Metric", "Value"])
             writer.writerow(["MRR", f"{overall_mrr:.4f}"])
@@ -298,13 +352,14 @@ def evaluate_from_test_data():
             writer.writerow(["BLEU", f"{overall_bleu:.4f}"])
             writer.writerow(["ACC", f"{overall_acc:.4f}"])
         
-        print(f"\n评估结果已保存到: {os.path.abspath(result_file)}")
+        print(f"\n评估结果已保存到:")
+        print(f"  汇总指标: {os.path.abspath(csv_path)}")
+        print(f"  逐条详情: {os.path.abspath(jsonl_path)}")
         
     except Exception as e:
         print(f"评估过程中出错: {e}")
         import traceback
         traceback.print_exc()
-
 
 def interactive_query():
     try:
@@ -322,7 +377,11 @@ def interactive_query():
         print(f"当前模式: {mode_str}")
         print(f"基础初始召回: {rag_system.initial_retrieve_k} 个片段 | 基础重排序后使用: {rag_system.final_top_k} 个片段")
         if ENABLE_ADAPTIVE_RETRIEVAL:
-            print(f"重试策略: 每次失败 K+{RETRIEVAL_STEP_SIZE}, TopN+{RERANK_OUTPUT_STEP_SIZE}, 最大轮次 {MAX_RETRIEVAL_ROUNDS}")
+            try:
+                from settings import RETRIEVAL_STEP_SIZE, RERANK_OUTPUT_STEP_SIZE, MAX_RETRIEVAL_ROUNDS
+                print(f"重试策略: 每次失败 K+{RETRIEVAL_STEP_SIZE}, TopN+{RERANK_OUTPUT_STEP_SIZE}, 最大轮次 {MAX_RETRIEVAL_ROUNDS}")
+            except ImportError:
+                print("自适应重试参数未导入，请检查 settings.py")
         print(f"查询日志将保存至: {os.path.abspath(rag_system.log_file_path)}")
         print("输入 'quit' 或 'exit' 退出系统")
         print()
@@ -339,8 +398,6 @@ def interactive_query():
                     continue
                 
                 start_time = time.time()
-                # 交互式查询不传评估器，因此即使启用自适应，也只会执行标准的一轮（根据 retriever_generator 的逻辑）
-                # 如果你希望交互式也自适应，你需要提供一个无监督的评估器（例如基于置信度）
                 response, _, _ = rag_system.query(user_input)
                 elapsed = time.time() - start_time
                 
@@ -362,9 +419,9 @@ def interactive_query():
         print(f"启动系统时出错: {e}")
 
 def main():
-    print("="*60)
-    print("RAG 系统")
-    print("="*60)
+    print("="*30)
+    print("RAG 系统评估接口")
+    print("="*30)
     print("1. 交互式查询")
     print("2. 系统评估")
     print("3. 退出")

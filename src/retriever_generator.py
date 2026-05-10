@@ -131,7 +131,7 @@ class RetrieverGenerator:
                 'content': doc,
                 'metadata': meta,
                 'initial_distance': dist,
-                'score': 1.0 - dist,          # 余弦相似度分数
+                'score': 1.0 - dist,          # 1-余弦相似度分数=余弦距离
                 'rerank_score': None
             })
         
