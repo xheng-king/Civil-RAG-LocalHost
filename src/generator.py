@@ -123,8 +123,8 @@ class Generator:
         all_reranked = self.retriever.rerank_documents(query, candidates, top_n=len(candidates))
         final_docs = all_reranked[:top_k]
 
-        mrr = self.retriever.calc_mrr_by_coverage(all_reranked, query, threshold=0.6)
-        ndcg = self.retriever.calc_ndcg_by_coverage(all_reranked, query)
+        mrr = self.retriever.calc_mrr_by_coverage(final_docs, query, threshold=0.6)
+        ndcg = self.retriever.calc_ndcg_by_coverage(final_docs, query)
         return final_docs, mrr, ndcg
 
     # -------------------- 答案生成 --------------------
@@ -207,23 +207,17 @@ class Generator:
             # ---------- 自适应模式 ----------
             current_k = self.initial_retrieve_k
             current_top_k = self.final_top_k
-            best_ndcg = 0.0
-            best_mrr = 0.0
-            best_docs = []
+            ndcg = 0.0
+            mrr = 0.0
+            docs = []
             rounds = 0
 
             for round_num in range(1, MAX_RETRIEVAL_ROUNDS + 1):
                 rounds = round_num
                 docs, mrr, ndcg = self._retrieve_and_rerank(user_input, current_k, current_top_k)
 
-                if ndcg > best_ndcg:
-                    best_ndcg = ndcg
-                    best_mrr = mrr
-                    best_docs = docs
-
                 if mrr > 0:   # 只要有一个文档达到覆盖率阈值即停止
                     print(f"[自适应] 第 {round_num} 轮满足条件 (MRR={mrr:.4f})，停止重试")
-                    final_docs = docs
                     break
                 else:
                     if round_num < MAX_RETRIEVAL_ROUNDS:
@@ -231,20 +225,17 @@ class Generator:
                         current_top_k += RERANK_OUTPUT_STEP_SIZE
                         print(f"[自适应] 第 {round_num} 轮未达标 (MRR=0)，扩大参数: K={current_k}, TopN={current_top_k}")
                     else:
-                        print(f"[自适应] 达到最大轮次 {MAX_RETRIEVAL_ROUNDS}，使用最佳结果 (NDCG={best_ndcg:.4f})")
-                        final_docs = best_docs
-            else:
-                final_docs = best_docs
+                        print(f"[自适应] 达到最大轮次 {MAX_RETRIEVAL_ROUNDS}")
 
-            answer = self._generate_answer(user_input, final_docs)
+            answer = self._generate_answer(user_input, docs)
             self._log_interaction(user_input, answer, round_num=rounds, status="Adaptive")
 
             if reference_answer is not None and evaluator_func is not None:
                 bleu = calculate_bleu_score(answer, reference_answer)
                 acc = 1 if check_answer_correctness(user_input, answer, reference_answer) else 0
                 metrics = {
-                    "mrr": best_mrr,
-                    "ndcg": best_ndcg,
+                    "mrr": mrr,
+                    "ndcg": ndcg,
                     "bleu": bleu,
                     "acc": acc,
                     "retrieval_rounds": rounds
@@ -255,7 +246,7 @@ class Generator:
 
 # ---------- 系统评测入口（供 main.py 调用） ----------
 def run_evaluation():
-    """系统评测入口（供 main.py 调用）"""
+    """系统评测入口（供 main.py 调用）- 支持断点续传，实时写入"""
     gen = Generator()
     
     # 1. 选择集合
@@ -297,9 +288,29 @@ def run_evaluation():
     csv_path = os.path.join(result_dir, "total.csv")
     jsonl_path = os.path.join(result_dir, "single_query.jsonl")
     
+    # ----- 断点续传：读取已有记录并恢复全局指标列表 -----
+    processed_queries = set()
     all_mrr, all_ndcg, all_bleu, all_acc, all_rounds = [], [], [], [], []
     
-    with open(jsonl_path, 'w', encoding='utf-8') as jsonl_file:
+    if os.path.exists(jsonl_path):
+        print(f"发现已有结果文件 {jsonl_path}，将跳过已评测的问题。")
+        with open(jsonl_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    record = json.loads(line.strip())
+                    q = record["query"]
+                    processed_queries.add(q)
+                    all_mrr.append(record["mrr"])
+                    all_ndcg.append(record["ndcg"])
+                    all_bleu.append(record["bleu"])
+                    all_acc.append(record["acc"])
+                    all_rounds.append(record["retrieval_rounds"])
+                except Exception as e:
+                    print(f"解析已有记录失败: {e}")
+        print(f"已加载 {len(processed_queries)} 条已有评测记录。")
+    
+    # ----- 以追加模式打开 JSONL，实时写入新结果 -----
+    with open(jsonl_path, 'a', encoding='utf-8') as jsonl_file:
         for file_path in selected_files:
             print(f"\n{'='*60}\n评估数据集: {os.path.basename(file_path)}")
             test_data = []
@@ -313,13 +324,20 @@ def run_evaluation():
             if not test_data:
                 continue
             
-            mrr_scores, ndcg_scores, bleu_scores, acc_scores, rounds_list = [], [], [], [], []
+            # 用于统计本次运行中该文件新评测的问题（仅用于展示）
+            new_mrr, new_ndcg, new_bleu, new_acc, new_rounds = [], [], [], [], []
+            skipped_count = 0
             
             for item in tqdm(test_data, desc="处理问题"):
                 query = item["question"]
                 ref_answer = item["answer"]
                 
-                # 调用 query，传入评估函数和参考答案
+                # 跳过已评测的 query
+                if query in processed_queries:
+                    skipped_count += 1
+                    continue
+                
+                # 调用核心查询接口（包含检索和生成）
                 answer, metrics = gen.query(
                     user_input=query,
                     evaluator_func=check_answer_correctness,
@@ -332,12 +350,21 @@ def run_evaluation():
                 acc = metrics.get("acc", 0)
                 rounds = metrics.get("retrieval_rounds", 1)
                 
-                mrr_scores.append(mrr)
-                ndcg_scores.append(ndcg)
-                bleu_scores.append(bleu)
-                acc_scores.append(acc)
-                rounds_list.append(rounds)
+                # 更新全局指标列表
+                all_mrr.append(mrr)
+                all_ndcg.append(ndcg)
+                all_bleu.append(bleu)
+                all_acc.append(acc)
+                all_rounds.append(rounds)
                 
+                # 更新当前文件的新指标列表
+                new_mrr.append(mrr)
+                new_ndcg.append(ndcg)
+                new_bleu.append(bleu)
+                new_acc.append(acc)
+                new_rounds.append(rounds)
+                
+                # 记录到 JSONL（每个问题立即写入）
                 record = {
                     "query": query,
                     "reference_answer": ref_answer,
@@ -349,31 +376,34 @@ def run_evaluation():
                     "retrieval_rounds": rounds
                 }
                 jsonl_file.write(json.dumps(record, ensure_ascii=False) + '\n')
+                jsonl_file.flush()          # 确保立即写入磁盘
+                
+                # 将该 query 加入已处理集合，避免同一会话内重复（尽管已有跳过逻辑）
+                processed_queries.add(query)
             
-            # 数据集汇总
-            avg_mrr = sum(mrr_scores)/len(mrr_scores)
-            avg_ndcg = sum(ndcg_scores)/len(ndcg_scores)
-            avg_bleu = sum(bleu_scores)/len(bleu_scores)
-            avg_acc = sum(acc_scores)/len(acc_scores)
-            avg_rounds = sum(rounds_list)/len(rounds_list)
-            print(f"\n数据集结果: MRR={avg_mrr:.4f}, NDCG={avg_ndcg:.4f}, BLEU={avg_bleu:.4f}, ACC={avg_acc:.4f}, 平均轮次={avg_rounds:.2f}")
-            
-            all_mrr.extend(mrr_scores)
-            all_ndcg.extend(ndcg_scores)
-            all_bleu.extend(bleu_scores)
-            all_acc.extend(acc_scores)
-            all_rounds.extend(rounds_list)
+            # 输出当前数据集的本次运行结果（仅针对新评测的问题）
+            if new_mrr:
+                avg_mrr = sum(new_mrr) / len(new_mrr)
+                avg_ndcg = sum(new_ndcg) / len(new_ndcg)
+                avg_bleu = sum(new_bleu) / len(new_bleu)
+                avg_acc = sum(new_acc) / len(new_acc)
+                avg_rounds = sum(new_rounds) / len(new_rounds)
+                print(f"\n本次新增评测 {len(new_mrr)} 条，数据集结果: MRR={avg_mrr:.4f}, NDCG={avg_ndcg:.4f}, BLEU={avg_bleu:.4f}, ACC={avg_acc:.4f}, 平均轮次={avg_rounds:.2f}")
+            else:
+                print(f"该数据集所有问题均已评测过，无新增。")
+            if skipped_count > 0:
+                print(f"（已跳过 {skipped_count} 个之前评测过的问题）")
     
-    # 总体结果
+    # ----- 总体结果（包含历史+新增）-----
     if all_mrr:
         overall = {
-            "MRR": sum(all_mrr)/len(all_mrr),
-            "NDCG": sum(all_ndcg)/len(all_ndcg),
-            "BLEU": sum(all_bleu)/len(all_bleu),
-            "ACC": sum(all_acc)/len(all_acc),
-            "Avg_Rounds": sum(all_rounds)/len(all_rounds)
+            "MRR": sum(all_mrr) / len(all_mrr),
+            "NDCG": sum(all_ndcg) / len(all_ndcg),
+            "BLEU": sum(all_bleu) / len(all_bleu),
+            "ACC": sum(all_acc) / len(all_acc),
+            "Avg_Rounds": sum(all_rounds) / len(all_rounds)
         }
-        print(f"\n{'='*60}\n总体评估结果:")
+        print(f"\n{'='*60}\n总体评估结果（所有已评测问题）:")
         for k, v in overall.items():
             print(f"  {k}: {v:.4f}")
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
@@ -384,7 +414,7 @@ def run_evaluation():
         print(f"\n结果已保存至: {os.path.abspath(csv_path)} 和 {os.path.abspath(jsonl_path)}")
     else:
         print("没有有效的评估数据。")
-
+        
 # ---------- 交互式入口（供 main.py 调用） ----------
 def run_interactive():
     """交互式问答入口（供 main.py 调用）"""

@@ -24,7 +24,7 @@ llm_API_key = ""
 
 # 基础检索参数 (当 ENABLE_ADAPTIVE_RETRIEVAL = False 时使用，或作为第一轮的基础值)
 BASE_INITIAL_RETRIEVE_K = 5   # ChromaDB 初次召回数量
-BASE_FINAL_TOP_K = 3          # 重排序后保留给 LLM 的数量
+BASE_FINAL_TOP_K = 2          # 重排序后保留给 LLM 的数量
 
 # 是否启用自适应检索重试机制 (类似 FLARE/Iterative Retrieval)
 # True: 如果回答被判定为不正确，则增加召回数量并重新查询，最多重试 MAX_RETRIEVAL_ROUNDS 次
@@ -32,10 +32,10 @@ BASE_FINAL_TOP_K = 3          # 重排序后保留给 LLM 的数量
 ENABLE_ADAPTIVE_RETRIEVAL = False 
 
 #最大重试轮次
-MAX_RETRIEVAL_ROUNDS = 2
+MAX_RETRIEVAL_ROUNDS = 3
 
 # 每轮增加的召回数量
-RETRIEVAL_STEP_SIZE = 5
+RETRIEVAL_STEP_SIZE = 3
 
 # 重排序后额外保留给LLM的数量增量 (即每轮多给LLM看1个文档)
 RERANK_OUTPUT_STEP_SIZE = 1
