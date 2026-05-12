@@ -1,0 +1,6 @@
+Metric,Value
+MRR,0.8594
+NDCG,0.9820
+BLEU,0.0859
+ACC,0.4583
+Avg_Rounds,1.0000
