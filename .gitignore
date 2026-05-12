@@ -16,3 +16,5 @@ __pycache__/
 
 !requirements.txt
 !README.md
+
+query_log.md
