@@ -2,11 +2,9 @@
 cache/*
 
 # 数据
-data/*
-!data/test/
-!data/result/
-!data/training/
-!data/src_files/
+data/exported_collections
+data/vectorstore
+data/result/image
 
 # 虚拟环境
 venv/

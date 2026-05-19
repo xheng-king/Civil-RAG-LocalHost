@@ -1,22 +1,18 @@
 # settings.py
 
-# pre-training embedding
-# base_url_set = ""
-# embedding_model = ""
-# embedding_API_key = ""
-
-# fine_tunned embedding
+# embedding model
 base_url_set = ""
-embedding_model = ""
-embedding_API_key = ""
+ft_embedding_model = ""
+ft_embedding_API_key = ""
 
+# rerank model
 rerank_model = ""
 rerank_base_url = ""
 rerank_API_key = ""
 
-vllm = ""
-vllm_base_url = ""
-vllm_API_key = ""
+vlm = ""
+vlm_base_url = ""
+vlm_API_key = ""
 
 llm = ""
 llm_base_url = ""
@@ -31,7 +27,7 @@ BASE_FINAL_TOP_K = 2          # 重排序后保留给 LLM 的数量
 # False: 仅执行单次标准查询流程，使用上方的 BASE_ 参数
 ENABLE_ADAPTIVE_RETRIEVAL = False 
 
-#最大重试轮次
+#最大检索轮次
 MAX_RETRIEVAL_ROUNDS = 3
 
 # 每轮增加的召回数量
@@ -39,3 +35,6 @@ RETRIEVAL_STEP_SIZE = 3
 
 # 重排序后额外保留给LLM的数量增量 (即每轮多给LLM看1个文档)
 RERANK_OUTPUT_STEP_SIZE = 1
+
+# 相关性阈值
+RelevantThreshold = 0.8

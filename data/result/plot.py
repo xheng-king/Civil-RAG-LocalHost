@@ -4,7 +4,7 @@
 文件夹结构：
     image/
         easy_MRR/
-            naive.png
+            baseline.png
             embedding-ft.png
             adaptive.png
             adaptive_embeddingft.png
@@ -20,7 +20,7 @@
     - 图片宽度20英寸，高度6英寸。
     - 图片文件若已存在则直接覆盖。
 交互式功能：列出当前目录下所有.jsonl文件，让用户为以下8个配置分别选择对应的文件：
-    - naive_easy, naive_hard
+    - baseline_easy, baseline_hard
     - embedding-ft_easy, embedding-ft_hard
     - adaptive_easy, adaptive_hard
     - adaptive_embeddingft_easy, adaptive_embeddingft_hard
@@ -34,18 +34,18 @@ from pathlib import Path
 # ----------------------------- 配置 ---------------------------------
 DATA_DIR = Path(".")  # 当前目录，可修改为具体路径
 OUTPUT_BASE_DIR = DATA_DIR / "image"  # 图片根目录
-SYSTEMS = ["naive", "embedding-ft", "adaptive", "adaptive_embeddingft"]
+SYSTEMS = ["baseline", "embedding-ft", "adaptive", "adaptive_embeddingft"]
 DIFFICULTIES = ["easy", "hard"]
 METRICS = ["mrr", "ndcg", "bleu", "acc"]
 METRIC_NAMES = {"mrr": "MRR", "ndcg": "NDCG", "bleu": "BLEU", "acc": "Accuracy"}
 
 # 颜色方案
-COLORS = {"naive": "blue", "embedding-ft": "green", "adaptive": "orange", "adaptive_embeddingft": "red"}
+COLORS = {"baseline": "blue", "embedding-ft": "green", "adaptive": "orange", "adaptive_embeddingft": "red"}
 
 # 定义8个配置，顺序将决定交互提示的顺序
 CONFIG_ITEMS = [
-    ("naive", "easy"),
-    ("naive", "hard"),
+    ("baseline", "easy"),
+    ("baseline", "hard"),
     ("embedding-ft", "easy"),
     ("embedding-ft", "hard"),
     ("adaptive", "easy"),

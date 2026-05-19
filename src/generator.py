@@ -17,7 +17,8 @@ from settings import (
     RERANK_OUTPUT_STEP_SIZE,
     BASE_INITIAL_RETRIEVE_K,
     BASE_FINAL_TOP_K,
-    llm, llm_base_url, llm_API_key
+    llm, llm_base_url, llm_API_key,
+    RelevantThreshold
 )
 
 
@@ -123,7 +124,7 @@ class Generator:
         all_reranked = self.retriever.rerank_documents(query, candidates, top_n=len(candidates))
         final_docs = all_reranked[:top_k]
 
-        mrr = self.retriever.calc_mrr_by_coverage(final_docs, query, threshold=0.6)
+        mrr = self.retriever.calc_mrr_by_coverage(final_docs, query, threshold=RelevantThreshold)
         ndcg = self.retriever.calc_ndcg_by_coverage(final_docs, query)
         return final_docs, mrr, ndcg
 

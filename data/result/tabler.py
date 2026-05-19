@@ -6,8 +6,8 @@
 BLEU和NDCG数值保留两位小数。
 
 交互式功能：列出当前目录下所有.jsonl文件，让用户为以下8个配置分别选择对应的文件：
-- naive_easy
-- naive_hard
+- baseline_easy
+- baseline_hard
 - embedding-ft_easy
 - embedding-ft_hard
 - adaptive_easy
@@ -24,7 +24,7 @@ from pathlib import Path
 DATA_DIR = Path(".")  # 当前目录，可修改为具体路径
 OUTPUT_FILE = "metrics_summary.xlsx"
 
-SYSTEMS = ["naive", "embedding-ft", "adaptive", "adaptive_embeddingft"]
+SYSTEMS = ["baseline", "embedding-ft", "adaptive", "adaptive_embeddingft"]
 DIFFICULTIES = ["easy", "hard"]
 METRICS = ["mrr", "ndcg", "bleu", "acc"]
 METRIC_DISPLAY = {"mrr": "MRR", "ndcg": "NDCG", "bleu": "BLEU", "acc": "Accuracy"}
@@ -34,8 +34,8 @@ DECIMAL_METRICS = ["ndcg", "bleu"]
 
 # 定义8个配置，顺序将决定交互提示的顺序
 CONFIG_ITEMS = [
-    ("naive", "easy"),
-    ("naive", "hard"),
+    ("baseline", "easy"),
+    ("baseline", "hard"),
     ("embedding-ft", "easy"),
     ("embedding-ft", "hard"),
     ("adaptive", "easy"),
