@@ -2,17 +2,17 @@
 
 # embedding model
 base_url_set = ""
-ft_embedding_model = ""
-ft_embedding_API_key = ""
+embedding_model = ""
+embedding_API_key = ""
 
 # rerank model
 rerank_model = ""
 rerank_base_url = ""
 rerank_API_key = ""
 
-vlm = ""
-vlm_base_url = ""
-vlm_API_key = ""
+vllm = ""
+vllm_base_url = ""
+vllm_API_key = ""
 
 llm = ""
 llm_base_url = ""
